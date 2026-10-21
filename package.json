@@ -1,0 +1,51 @@
+{
+  "name": "sales-copilot",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0"
+  },
+  "packageManager": "npm@11.9.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"npm run dev -w @sales/api\" \"npm run dev -w @sales/web\"",
+    "build": "npm run db:generate && npm run build:packages && npm run build -w @sales/api && npm run build -w @sales/web",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.checks.json",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.mts",
+    "test:e2e": "playwright test",
+    "db:generate": "node scripts/generate-client.mjs",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:seed": "tsx packages/database/src/seed.ts",
+    "env:init": "node scripts/init-env.mjs",
+    "infra:up": "docker compose up -d --wait postgres redis",
+    "infra:down": "docker compose stop postgres redis",
+    "build:packages": "npm run build -w @sales/shared && npm run build -w @sales/database",
+    "predev": "npm run db:generate && npm run build:packages"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "bcryptjs": "3.0.3",
+    "dotenv": "17.3.1",
+    "pg": "^8.16.3",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@prisma/client-generator-js": "7.10.1",
+    "@prisma/internals": "7.10.1",
+    "@types/node": "24.12.0",
+    "@types/pg": "^8.15.0",
+    "@types/supertest": "6.0.3",
+    "concurrently": "^9.2.5",
+    "prisma": "7.10.1",
+    "supertest": "7.2.2",
+    "tsx": "^4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

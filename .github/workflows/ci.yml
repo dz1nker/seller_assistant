@@ -1,0 +1,50 @@
+name: Foundation CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: sales
+          POSTGRES_PASSWORD: ci-disposable-password
+          POSTGRES_DB: sales_copilot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sales -d sales_copilot"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://sales:ci-disposable-password@127.0.0.1:5432/sales_copilot
+      REDIS_URL: redis://127.0.0.1:6379
+      WEB_ORIGIN: http://localhost:3000
+      COOKIE_SECURE: "false"
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run db:generate && npm run build:packages && npm run db:migrate
+      - run: npm run typecheck
+      - run: npm test && npm run test:integration
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-failure
+          path: test-results
+          retention-days: 3

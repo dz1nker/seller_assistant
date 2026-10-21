@@ -1,0 +1,106 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum StageKind {
+  OPEN
+  WON
+  LOST
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique @db.VarChar(254)
+  name         String   @db.VarChar(100)
+  passwordHash String
+  createdAt    DateTime @default(now())
+  memberships  WorkspaceMember[]
+  sessions     Session[]
+  @@map("users")
+}
+
+model Workspace {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @db.VarChar(120)
+  description String   @default("")
+  timezone    String   @default("Europe/Minsk")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  members     WorkspaceMember[]
+  pipelines   Pipeline[]
+  auditLogs   AuditLog[]
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  workspaceId String @db.Uuid
+  userId      String @db.Uuid
+  role        Role   @default(MEMBER)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions    Session[]
+  @@id([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+model Session {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @db.Uuid
+  workspaceId      String   @db.Uuid
+  accessHash       String   @unique
+  refreshHash      String   @unique
+  accessExpiresAt  DateTime
+  refreshExpiresAt DateTime
+  createdAt        DateTime @default(now())
+  user             User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  member           WorkspaceMember @relation(fields: [workspaceId, userId], references: [workspaceId, userId], onDelete: Cascade)
+  @@index([userId])
+  @@index([refreshExpiresAt])
+  @@map("sessions")
+}
+
+model Pipeline {
+  id          String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  name        String @db.VarChar(120)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  stages      PipelineStage[]
+  @@unique([id, workspaceId])
+  @@index([workspaceId])
+  @@map("pipelines")
+}
+
+model PipelineStage {
+  id          String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  pipelineId  String @db.Uuid
+  name        String @db.VarChar(120)
+  position    Int
+  kind        StageKind @default(OPEN)
+  pipeline    Pipeline @relation(fields: [pipelineId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  @@unique([pipelineId, position])
+  @@index([workspaceId])
+  @@map("pipeline_stages")
+}
+
+model AuditLog {
+  id          String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  actorId     String @db.Uuid
+  action      String @db.VarChar(100)
+  createdAt   DateTime @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@index([workspaceId, createdAt])
+  @@map("audit_logs")
+}

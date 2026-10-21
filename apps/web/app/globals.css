@@ -1,0 +1,31 @@
+@import "tailwindcss";
+@source "../../../packages/ui/src";
+@custom-variant dark (&:where(.dark, .dark *));
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-primary: var(--primary);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+}
+:root {
+  --background: #f8f9fc; --foreground: #202332; --surface: #ffffff;
+  --primary: #7152e8; --muted: #f0f1f6; --muted-foreground: #6e7586;
+  --border: #e6e8ef; --destructive: #bf3044;
+}
+.dark {
+  --background: #11131b; --foreground: #edf0fa; --surface: #1a1d29;
+  --primary: #9a83f5; --muted: #252939; --muted-foreground: #a2abc0;
+  --border: #303548; --destructive: #ff8d9e;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--background); color: var(--foreground); font-family: Arial, Helvetica, sans-serif; -webkit-font-smoothing: antialiased; }
+button, a, input, textarea { -webkit-tap-highlight-color: transparent; }
+button:not(:disabled), a { cursor: pointer; }
+::selection { background: #cfc0ff; color: #211849; }
+.dot-grid { background-image: radial-gradient(#b2a3e4 1px, transparent 1px); background-size: 24px 24px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; } }
