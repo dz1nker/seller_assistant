@@ -1,0 +1,3 @@
+# Preserve CRLF in Windows launchers, including GitHub ZIP archives.
+*.cmd -text
+*.sh text eol=lf
