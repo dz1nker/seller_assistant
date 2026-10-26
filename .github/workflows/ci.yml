@@ -3,6 +3,14 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  windows-launcher:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Docker mode detection in Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\windows\check-docker-mode.ps1
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15

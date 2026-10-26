@@ -51,8 +51,10 @@ timeout /t 5 /nobreak >nul
 goto wait_docker
 
 :check_linux
-docker info --format "{{.OSType}}" 2>nul | findstr /x /c:"linux" >nul
-if errorlevel 1 goto linux_required
+powershell.exe -NoProfile -Command "$modeOutput=@(& docker info --format '{{.OSType}}'); $modeExit=$LASTEXITCODE; if ($modeExit -ne 0) { exit 20 }; $mode=[string]::Join('', $modeOutput).Trim(); Write-Host ('Docker Engine: ' + $mode); if ($mode -ieq 'linux') { exit 0 }; if ($mode -ieq 'windows') { exit 10 }; exit 30"
+set "DOCKER_MODE_EXIT=%ERRORLEVEL%"
+if "%DOCKER_MODE_EXIT%"=="10" goto linux_required
+if not "%DOCKER_MODE_EXIT%"=="0" goto docker_mode_failed
 
 if exist ".env" goto start_project
 echo Создаём локальные настройки и случайные пароли базы данных.
@@ -117,8 +119,14 @@ echo После настройки или перезагрузки запуст�
 goto failed
 
 :linux_required
+echo Docker Engine сообщил режим windows.
 echo Проекту нужен режим Linux containers в Docker Desktop.
 echo Переключите Docker Desktop в этот режим и запустите файл снова.
+goto failed
+
+:docker_mode_failed
+echo Не удалось определить режим Docker Engine. Это не означает, что включены Windows containers.
+echo Посмотрите строку Docker Engine или ошибку команды выше и пришлите снимок этого окна.
 goto failed
 
 :configuration_failed
