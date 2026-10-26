@@ -4,6 +4,8 @@ import path from 'node:path';
 config({ path: path.resolve(process.cwd(), '../../.env'), quiet: true });
 
 const nextConfig: NextConfig = {
+  output: process.env.SALES_DOCKER_STANDALONE === 'true' ? 'standalone' : undefined,
+  outputFileTracingRoot: path.resolve(__dirname, '../..'),
   transpilePackages: ['@sales/shared', '@sales/ui'],
   poweredByHeader: false,
   experimental: { cpus: 2 },

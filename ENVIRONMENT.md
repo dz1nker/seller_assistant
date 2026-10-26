@@ -75,3 +75,11 @@ Docker в этой среде использует storage driver vfs и рас�
 GitHub CI workflow создан, но выполнение на GitHub пока не подтверждено. Telegram/LLM не подключались и не проверялись. Полный Compose прошёл health checks. В Chromium проверены регистрация и запись настроек через контейнерный web/API; после restart API/web сохранились сессия и Workspace. Настоящая остановка Redis дала readiness 503, повторный запуск восстановил авторизованный доступ. Временный smoke-аккаунт удалён.
 
 Повторный запуск scripts/cloud-install.sh с чистой установкой npm ci и существующим .env/БД завершился успешно; существующие данные и настройки сохранены.
+
+## Облегчённые контейнеры: проверка 26 октября 2026
+
+Предыдущие рабочие образы включали зависимости всего monorepo. Dockerfile теперь отделяет build-stage от runtime: API получает production-зависимости и готовые JS/Prisma/SQL-файлы, web — Next.js standalone со статическими файлами. npm cache остаётся в BuildKit cache mount. Документы, тесты и CI-конфигурация исключены из build context. Для host/dev сборки standalone не включается; флаг `SALES_DOCKER_STANDALONE=true` задаётся в Docker build.
+
+По `docker image inspect .Size` в текущей Linux cloud API уменьшился с 1534 до 351 МБ, web — с 1586 до 298 МБ; вместе примерно на 79%. Это несжатый размер готовых образов, не обещание конкретного времени скачивания/экспорта на Windows. На машине пользователя задержку также могут вызывать ресурсы Docker и скорость/свободное место диска.
+
+Проверены сборка обоих образов, TypeScript frontend, Compose config и запуск четырёх сервисов с health checks. В API runtime проверено отсутствие Next.js, TypeScript, Vitest, Playwright и Prisma CLI. Chromium выполнил регистрацию, запись бизнес-настроек, чтение после restart API/web; остановка Redis дала readiness 503, повторный запуск восстановил авторизованный доступ. Созданный smoke-аккаунт удалён. Схема и сохранённые данные не изменялись; существующий `.env` сохраняется.

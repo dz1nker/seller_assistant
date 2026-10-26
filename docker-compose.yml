@@ -41,7 +41,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
-    command: ["sh", "-c", "npm run db:migrate && npm run start -w @sales/api"]
+    command: ["sh", "-c", "node scripts/migrate.mjs && exec node apps/api/dist/apps/api/src/main.js"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 5s
@@ -59,7 +59,6 @@ services:
       api: { condition: service_healthy }
     environment:
       NODE_ENV: production
-    command: ["npm", "run", "start", "-w", "@sales/web"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 5s

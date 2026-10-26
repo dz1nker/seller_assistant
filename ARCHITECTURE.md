@@ -38,6 +38,8 @@ SQL-миграции применяет `scripts/migrate.mjs`: advisory lock н�
 
 Общие Node-пакеты компилируются в CommonJS до API. Next.js компилирует UI. npm lockfile используется в `npm ci`; Docker-образы PostgreSQL/Redis и базовый Node закрепляются digest. Живые процессы после публикации облачной среды должны запускаться заново.
 
+Docker разделяет build и runtime. Полный набор зависимостей устанавливается только в build-stage. В API runtime устанавливаются production-зависимости выбранных workspaces и корня, а optional peer-only CLI Prisma/TypeScript (`devOptional` в lockfile) исключаются через `--omit=dev --omit=peer --omit=optional`; необходимые runtime peers перечислены явно. Готовый Prisma-клиент копируется из проверенной стадии генерации. SQL-миграции запускаются обычным Node.js. Web использует Next.js standalone, который включается только флагом `SALES_DOCKER_STANDALONE=true` в Docker build; host/dev команды сохраняют прежний режим. npm cache хранится в BuildKit cache mount; сборочные и тестовые зависимости не экспортируются в рабочие образы.
+
 ## Следующие архитектурные границы
 
 На этапе 2 отдельно моделируются Contact, Conversation и Deal. Нельзя объединять людей по имени. В каждой сущности и запросе проверяется Workspace; стадии и сделки получают составные ограничения. Канбан будет использовать dnd-kit и backend-транзакцию с историей, с откатом optimistic update при ошибке.

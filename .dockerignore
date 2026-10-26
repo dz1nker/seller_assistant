@@ -8,3 +8,14 @@ node_modules
 .local
 test-results
 playwright-report
+Dockerfile
+docker-compose.yml
+.github
+docs
+tests
+README.md
+ARCHITECTURE.md
+ENVIRONMENT.md
+IMPLEMENTATION_PLAN.md
+SECURITY.md
+START_HERE_RU.md
