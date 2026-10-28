@@ -1,2 +1,4 @@
-import { Upcoming } from '../../../components/upcoming';
-export default function AnalyticsPage() { return <Upcoming feature="analytics" />; }
+import { Analytics } from "../../../components/analytics";
+export default function AnalyticsPage() {
+  return <Analytics />;
+}

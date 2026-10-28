@@ -39,6 +39,17 @@ model Workspace {
   members     WorkspaceMember[]
   pipelines   Pipeline[]
   auditLogs   AuditLog[]
+  profile Json @default("{}")
+  demoVersion Int @default(0)
+  contacts Contact[]
+  products Product[]
+  connections ChannelConnection[]
+  conversations Conversation[]
+  deals Deal[]
+  tasks Task[]
+  knowledge KnowledgeItem[]
+  analyses AiAnalysis[]
+  notifications Notification[]
   @@map("workspaces")
 }
 
@@ -76,6 +87,7 @@ model Pipeline {
   name        String @db.VarChar(120)
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   stages      PipelineStage[]
+  deals Deal[]
   @@unique([id, workspaceId])
   @@index([workspaceId])
   @@map("pipelines")
@@ -88,7 +100,10 @@ model PipelineStage {
   name        String @db.VarChar(120)
   position    Int
   kind        StageKind @default(OPEN)
+  deals Deal[]
   pipeline    Pipeline @relation(fields: [pipelineId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  @@unique([id, workspaceId])
+  @@unique([id, pipelineId, workspaceId])
   @@unique([pipelineId, position])
   @@index([workspaceId])
   @@map("pipeline_stages")
@@ -103,4 +118,324 @@ model AuditLog {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   @@index([workspaceId, createdAt])
   @@map("audit_logs")
+}
+
+enum ChannelKind {
+  DEMO
+  TELEGRAM
+  INSTAGRAM
+}
+enum PrivacyMode {
+  EXCLUDED
+  CANDIDATE
+  CLIENT
+}
+enum SendStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+  UNCERTAIN
+}
+model Contact {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  isDemo Boolean @default(false)
+  name String @db.VarChar(120)
+  username String? @db.VarChar(100)
+  notes String @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  identities ContactIdentity[]
+  deals Deal[]
+  @@unique([id, workspaceId])
+  @@index([workspaceId, name])
+  @@map("contacts")
+}
+model ContactIdentity {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  contactId String @db.Uuid
+  platform ChannelKind
+  connectionKey String
+  externalId String
+  contact Contact @relation(fields: [contactId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  @@unique([workspaceId, platform, connectionKey, externalId])
+  @@map("contact_identities")
+}
+model Product {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  isDemo Boolean @default(false)
+  name String @db.VarChar(120)
+  description String @default("")
+  amount Decimal? @db.Decimal(14,2)
+  currency String @default("RUB") @db.VarChar(3)
+  format String @default("")
+  duration String @default("")
+  audience String @default("")
+  limitations String @default("")
+  outcomes String @default("")
+  paymentOptions String @default("")
+  faq String @default("")
+  cases String @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  deals Deal[]
+  @@unique([id, workspaceId])
+  @@index([workspaceId])
+  @@map("products")
+}
+model ChannelConnection {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  channel ChannelKind @default(TELEGRAM)
+  status String @default("DISCONNECTED")
+  label String @default("Telegram")
+  accountId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  @@unique([id, workspaceId])
+  @@index([workspaceId])
+  @@map("channel_connections")
+}
+model Conversation {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  connectionId String? @db.Uuid
+  externalChatId String?
+  contactId String? @db.Uuid
+  source ChannelKind
+  title String @db.VarChar(200)
+  username String?
+  chatType String @default("private")
+  mode PrivacyMode @default(CANDIDATE)
+  version Int @default(0)
+  unreadCount Int @default(0)
+  waitingForReply Boolean @default(false)
+  retentionDays Int @default(30)
+  lastActivityAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contact Contact? @relation(fields: [contactId, workspaceId], references: [id, workspaceId], onDelete: NoAction)
+  connection ChannelConnection? @relation(fields: [connectionId, workspaceId], references: [id, workspaceId], onDelete: NoAction)
+  messages Message[]
+  dealLinks DealConversation[]
+  analyses AiAnalysis[]
+  tasks Task[]
+  @@unique([id, workspaceId])
+  @@unique([workspaceId, connectionId, externalChatId])
+  @@index([workspaceId, lastActivityAt])
+  @@map("conversations")
+}
+model Message {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  conversationId String @db.Uuid
+  connectionId String? @db.Uuid
+  externalChatId String?
+  externalMessageId String?
+  commandId String? @unique @db.Uuid
+  suggestionId String? @db.Uuid
+  direction String
+  kind String @default("text")
+  text String
+  replyToExternalId String?
+  status SendStatus @default(SENT)
+  error String?
+  sentAt DateTime @default(now())
+  editedAt DateTime?
+  conversation Conversation @relation(fields: [conversationId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  @@unique([id, workspaceId])
+  @@unique([workspaceId, connectionId, externalChatId, externalMessageId])
+  @@index([workspaceId, conversationId, sentAt, id])
+  @@map("messages")
+}
+model MessageCommand {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  conversationId String @db.Uuid
+  messageId String @unique @db.Uuid
+  key String @db.Uuid
+  bodyHash String
+  attempts Int @default(0)
+  status SendStatus @default(PENDING)
+  externalMessageId String?
+  error String?
+  startedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([workspaceId, key])
+  @@index([status, createdAt])
+  @@map("message_commands")
+}
+model Deal {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  isDemo Boolean @default(false)
+  contactId String @db.Uuid
+  productId String? @db.Uuid
+  pipelineId String @db.Uuid
+  stageId String @db.Uuid
+  title String @db.VarChar(200)
+  amount Decimal? @db.Decimal(14,2)
+  currency String @default("RUB") @db.VarChar(3)
+  status StageKind @default(OPEN)
+  onHold Boolean @default(false)
+  priority String @default("NORMAL")
+  nextActionAt DateTime?
+  lossReason String?
+  version Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  closedAt DateTime?
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId, workspaceId], references: [id, workspaceId], onDelete: NoAction)
+  product Product? @relation(fields: [productId, workspaceId], references: [id, workspaceId], onDelete: NoAction)
+  pipeline Pipeline @relation(fields: [pipelineId, workspaceId], references: [id, workspaceId], onDelete: NoAction)
+  stage PipelineStage @relation(fields: [stageId, pipelineId, workspaceId], references: [id, pipelineId, workspaceId], onDelete: NoAction)
+  conversations DealConversation[]
+  history DealStageHistory[]
+  tasks Task[]
+  @@unique([id, workspaceId])
+  @@index([workspaceId, pipelineId, stageId])
+  @@map("deals")
+}
+model DealConversation {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  dealId String @db.Uuid
+  conversationId String @db.Uuid
+  deal Deal @relation(fields: [dealId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  @@unique([dealId, conversationId])
+  @@index([workspaceId])
+  @@map("deal_conversations")
+}
+model DealStageHistory {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  dealId String @db.Uuid
+  actorId String @db.Uuid
+  fromStage String?
+  toStage String
+  createdAt DateTime @default(now())
+  deal Deal @relation(fields: [dealId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  @@index([workspaceId, dealId, createdAt])
+  @@map("deal_stage_history")
+}
+model KnowledgeItem {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  title String @db.VarChar(200)
+  text String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@index([workspaceId])
+  @@map("knowledge_items")
+}
+model AiAnalysis {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  conversationId String @db.Uuid
+  contextVersion String
+  provider String
+  promptVersion String
+  result Json
+  createdAt DateTime @default(now())
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  suggestions AiSuggestion[]
+  usage AiUsage[]
+  @@unique([id, workspaceId])
+  @@index([workspaceId, conversationId, createdAt])
+  @@map("ai_analyses")
+}
+model AiSuggestion {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  analysisId String @db.Uuid
+  tone String
+  text String
+  feedback String @default("GENERATED")
+  edited Boolean @default(false)
+  updatedAt DateTime @updatedAt
+  analysis AiAnalysis @relation(fields: [analysisId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  @@unique([id, workspaceId])
+  @@index([workspaceId, analysisId])
+  @@map("ai_suggestions")
+}
+model AiUsage {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  analysisId String @db.Uuid
+  inputTokens Int
+  outputTokens Int
+  cost Decimal? @db.Decimal(16,8)
+  createdAt DateTime @default(now())
+  analysis AiAnalysis @relation(fields: [analysisId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  @@index([workspaceId, createdAt])
+  @@map("ai_usage")
+}
+model AiPolicyDecision {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  conversationId String @db.Uuid
+  allowed Boolean
+  reason String
+  createdAt DateTime @default(now())
+  @@index([workspaceId, createdAt])
+  @@map("ai_policy_decisions")
+}
+model Task {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  ownerId String @db.Uuid
+  conversationId String? @db.Uuid
+  dealId String? @db.Uuid
+  title String @db.VarChar(200)
+  priority String @default("NORMAL")
+  dueAt DateTime?
+  doneAt DateTime?
+  version Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  deal Deal? @relation(fields: [dealId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  notifications Notification[]
+  @@unique([id, workspaceId])
+  @@index([workspaceId, doneAt, dueAt])
+  @@map("tasks")
+}
+model Notification {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  taskId String? @db.Uuid
+  key String @unique
+  title String
+  readAt DateTime?
+  createdAt DateTime @default(now())
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  @@index([workspaceId, createdAt])
+  @@map("notifications")
+}
+model IntegrationEvent {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  connectionId String @db.Uuid
+  externalId String
+  kind String
+  createdAt DateTime @default(now())
+  @@unique([connectionId, externalId])
+  @@index([workspaceId, createdAt])
+  @@map("integration_events")
 }

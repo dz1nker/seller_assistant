@@ -38,12 +38,39 @@ services:
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       NODE_ENV: ${API_NODE_ENV:-development}
+      GATEWAY_URL: http://telegram-gateway:4101
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:?Run environment initializer}
+      AI_PROVIDER: ${AI_PROVIDER:-demo}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.openai.com/v1}
+      AI_MODEL: ${AI_MODEL:-gpt-4.1-mini}
+      AI_INPUT_COST_PER_MILLION: ${AI_INPUT_COST_PER_MILLION:-}
+      AI_OUTPUT_COST_PER_MILLION: ${AI_OUTPUT_COST_PER_MILLION:-}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      telegram-gateway: { condition: service_healthy }
     command: ["sh", "-c", "node scripts/migrate.mjs && exec node apps/api/dist/apps/api/src/main.js"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 4s
+      retries: 15
+  telegram-gateway:
+    profiles: ["app"]
+    build:
+      context: .
+      target: telegram-gateway
+    restart: unless-stopped
+    environment:
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:?Run environment initializer}
+      SESSION_MASTER_KEY: ${SESSION_MASTER_KEY:?Run environment initializer}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      API_INTERNAL_URL: http://api:4000
+    volumes: ["telegramdata:/data"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4101/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 5s
       timeout: 4s
       retries: 15
@@ -67,3 +94,4 @@ services:
 volumes:
   pgdata:
   redisdata:
+  telegramdata:

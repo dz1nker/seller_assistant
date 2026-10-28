@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": "^22.12.0 || ^24.0.0"
+    "node": "^24.0.0"
   },
   "packageManager": "npm@11.9.0",
   "workspaces": [
@@ -11,8 +11,8 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -k -n api,web \"npm run dev -w @sales/api\" \"npm run dev -w @sales/web\"",
-    "build": "npm run db:generate && npm run build:packages && npm run build -w @sales/api && npm run build -w @sales/web",
+    "dev": "concurrently -k -n api,web,telegram \"npm run dev -w @sales/api\" \"npm run dev -w @sales/web\" \"npm run dev -w @sales/telegram-gateway\"",
+    "build": "npm run db:generate && npm run build:packages && npm run build -w @sales/api && npm run build -w @sales/telegram-gateway && npm run build -w @sales/web",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.checks.json",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.mts",
@@ -32,7 +32,7 @@
     "bcryptjs": "3.0.3",
     "dotenv": "17.3.1",
     "pg": "^8.16.3",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",
@@ -47,5 +47,9 @@
     "tsx": "^4.23.15",
     "typescript": "5.9.3",
     "vitest": "^4.1.12"
+  },
+  "overrides": {
+    "multer": "2.5.0",
+    "body-parser": "2.4.0"
   }
 }

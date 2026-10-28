@@ -22,7 +22,10 @@ if (proxy) {
 if (ca && existsSync(ca)) flags.push('--secret', `id=proxy_ca,src=${ca}`);
 env.DOCKER_CONFIG ??= path.resolve('.local/docker');
 mkdirSync(env.DOCKER_CONFIG, { recursive: true });
-for (const target of ['api', 'web']) {
+const supported = ['api', 'web', 'telegram-gateway'];
+const targets = process.argv.slice(2);
+if (targets.some(target => !supported.includes(target))) throw new Error('Unknown Docker target');
+for (const target of targets.length ? targets : supported) {
   const args = ['build', '--network=host', ...flags, '--target', target, '-t', `sales-copilot-${target}`, '.'];
   const result = spawnSync('docker', args, { env, stdio: 'inherit' });
   if (result.status !== 0) process.exit(result.status ?? 1);

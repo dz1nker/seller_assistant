@@ -11,9 +11,9 @@ cd /workspace/seller_assistant
 bash scripts/cloud-install.sh
 ```
 
-Скрипт использует `npm ci` с cache в writable `/workspace`, сохраняет существующий `.env`, поднимает и ждёт PostgreSQL/Redis, применяет миграции и собирает оба приложения. Генерация Prisma/WASM и общих пакетов включена в `npm run build`.
+Скрипт использует `npm ci` с cache в writable `/workspace`, сохраняет существующий `.env`, поднимает и ждёт PostgreSQL/Redis, применяет миграции и собирает API, web и Telegram Gateway. Генерация Prisma/WASM и общих пакетов включена в `npm run build`.
 
-Установка не создаёт стандартного пользовательского аккаунта и не требует Telegram/LLM ключей. Для входа используйте регистрацию. Необходимые локальные пароли сервисов создаются `env:init`; не переносите их в код или инструкции. Секреты будущих интеграций вводятся в защищённых настройках среды, не в переписке с Codex.
+Установка не создаёт стандартного пользовательского аккаунта и не требует Telegram/LLM ключей. Для входа используйте регистрацию. Необходимые локальные пароли сервисов создаются `env:init`; не переносите их в код или инструкции. Секреты интеграций вводятся в защищённых настройках среды, не в переписке с Codex.
 
 ## Запуск после восстановления snapshot
 
@@ -21,14 +21,15 @@ bash scripts/cloud-install.sh
 
 ```bash
 cd /workspace/seller_assistant
+npm run env:init
 docker compose up -d --wait postgres redis
 npm run db:migrate
 npm run dev
 ```
 
-Запускайте dev в длительной shell-сессии инструмента. Next работает на 3000, API на 4000. Проверяйте внутренним запросом `GET /api/health/ready` через порт web: ожидается `status=ok,database=up,redis=up`. Затем проверьте страницу login и функциональный вход/регистрацию. Не создавайте публичные preview-ссылки на localhost.
+Запускайте dev в длительной shell-сессии инструмента. Next работает на 3000, API на 4000, Gateway на 4101. Проверяйте внутренним запросом `GET /api/health/ready` через порт web: ожидается `status=ok,database=up,redis=up`. Затем проверьте страницу login и функциональный вход/регистрацию. Не создавайте публичные preview-ссылки на localhost.
 
-Если ранее запускали полный app-профиль Compose и порт 3000 занят, остановите **только собственные** контейнеры `docker compose stop web api` перед запуском dev; оставьте PostgreSQL/Redis и их данные. Для полного контейнерного запуска смотрите README.
+Если ранее запускали полный app-профиль Compose и порт 3000 занят, остановите **только собственные** контейнеры `docker compose stop web api telegram-gateway` перед запуском dev; оставьте PostgreSQL/Redis и их данные. Для полного контейнерного запуска смотрите README.
 
 ## Сеть и доверие
 
@@ -83,3 +84,23 @@ GitHub CI workflow создан, но выполнение на GitHub пока 
 По `docker image inspect .Size` в текущей Linux cloud API уменьшился с 1534 до 351 МБ, web — с 1586 до 298 МБ; вместе примерно на 79%. Это несжатый размер готовых образов, не обещание конкретного времени скачивания/экспорта на Windows. На машине пользователя задержку также могут вызывать ресурсы Docker и скорость/свободное место диска.
 
 Проверены сборка обоих образов, TypeScript frontend, Compose config и запуск четырёх сервисов с health checks. В API runtime проверено отсутствие Next.js, TypeScript, Vitest, Playwright и Prisma CLI. Chromium выполнил регистрацию, запись бизнес-настроек, чтение после restart API/web; остановка Redis дала readiness 503, повторный запуск восстановил авторизованный доступ. Созданный smoke-аккаунт удалён. Схема и сохранённые данные не изменялись; существующий `.env` сохраняется.
+
+## MVP — 28 октября 2026
+
+Добавлены CRM, миграции MVP, privacy guard, Socket.IO, BullMQ, AI и настоящий TDLib Gateway. Node.js 24 обязателен для node:sqlite. `env:init` теперь также безопасно добавляет отсутствующие GATEWAY_TOKEN/SESSION_MASTER_KEY в существующий `.env`, сохраняя имеющиеся значения. Telegram credentials и AI key остаются необязательными для установки. Нельзя считать живые внешние интеграции проверенными без соответствующих ключей и аккаунта.
+
+Gateway хранит сессии в `telegramdata` Compose volume; master key хранится отдельно в `.env`. Никогда не публикуйте их. Для работы native MTProto нужны фактический сетевой доступ к Telegram и локальные API credentials, а не подставленные значения.
+
+Системный Chromium в текущем sandbox использует дополнительные writable каталоги:
+
+```bash
+PLAYWRIGHT_NO_SANDBOX=true XDG_CONFIG_HOME=/tmp/sales-chromium-config XDG_CACHE_HOME=/tmp/sales-chromium-cache npm run test:e2e
+```
+
+Флаг `skipTrailingSlashRedirect` и отдельный rewrite `/api/socket.io/:path* → /socket.io/` сохраняют необходимый slash Engine.IO; иначе соединение получает redirect/404 и realtime не работает. Socket.IO начинает с polling и затем может обновить транспорт до WebSocket.
+
+Подтверждено в текущей машине: чистая `npm ci` из обновлённого lockfile, генерация Prisma/WASM, typecheck, build API/web/Gateway, 17 unit + 35 integration + 9 Chromium e2e. `npm audit` — 0 известных уязвимостей; overrides multer/body-parser закрепляют исправленные версии. Проверены tenant isolation, privacy purge/AI denial, HTTP Structured Outputs fixture, source send journal и запрет blind resend, command status precedence, защита callback URL aliases, параллельное изменение стадий/создание сделок и сохранение суммы/валюты при partial edit, kanban drag/history, AI apply/edit/manual send, задачи/уведомления и session/realtime recovery без reload.
+
+Все пять Compose-сервисов запущены с health checks. В runtime Gateway фактически загружена TDLib 1.8.69. В контейнерном Chromium проверены регистрация, запись бизнес-настроек, выполнение DEMO-команды настоящим BullMQ worker, сохранение сессии/истории после restart API/web/Gateway. Остановка Redis дала readiness 503, восстановление вернуло авторизованный доступ. Тестовый smoke-аккаунт и его данные удаляются. Живая авторизация/обмен с Telegram и внешний LLM с пользовательским ключом не выполнялись. Windows launcher требует отдельной проверки на Windows.
+
+Несжатые runtime images в текущей Linux cloud: API около 367 МБ, web около 299 МБ, Gateway около 374 МБ. Это размеры образов, не оценка времени скачивания на компьютере пользователя. После сборки очищен только созданный задачей BuildKit cache, все volumes сохранены.

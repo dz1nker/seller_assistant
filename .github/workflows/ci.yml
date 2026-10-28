@@ -1,4 +1,4 @@
-name: Foundation CI
+name: Sales Copilot CI
 on: [push, pull_request]
 permissions:
   contents: read

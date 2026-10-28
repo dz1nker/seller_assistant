@@ -56,8 +56,7 @@ set "DOCKER_MODE_EXIT=%ERRORLEVEL%"
 if "%DOCKER_MODE_EXIT%"=="10" goto linux_required
 if not "%DOCKER_MODE_EXIT%"=="0" goto docker_mode_failed
 
-if exist ".env" goto start_project
-echo Создаём локальные настройки и случайные пароли базы данных.
+echo Проверяем настройки. Существующие пароли сохраняются.
 docker run --rm -v "%CD%:/project" -w /project node:24-bookworm-slim@sha256:91acba91b842bec0bf7ea6f5e09c644c7ccad72c4996ed9616d861d1c7cd60d4 node scripts/init-env.mjs
 if errorlevel 1 goto configuration_failed
 
@@ -131,7 +130,7 @@ goto failed
 
 :configuration_failed
 echo Не удалось подготовить настройки. Посмотрите сообщение об ошибке выше.
-echo Существующий .env не изменён. Не отправляйте его содержимое или пароли в чат.
+echo Существующие значения .env сохранены. Не отправляйте его содержимое или пароли в чат.
 goto failed
 
 :startup_failed

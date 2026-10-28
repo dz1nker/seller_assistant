@@ -1,29 +1,285 @@
-'use client';
-import Link from 'next/link';
-import { ArrowRight, BriefcaseBusiness, Check, CheckCheck, Layers3, MessageSquare, PlugZap, ShieldCheck, Sparkles } from 'lucide-react';
-import { Badge, Button, Card } from '@sales/ui';
-import { useUser, useWorkspace } from '../lib/queries';
-import { ErrorNotice, Loading } from './feedback';
-import { PageHeading } from './page-heading';
+"use client";
+import { useState } from "react";
+import Link from "next/link";
+import { Plus, Check, Clock, Bell, Trash2, ArrowRight } from "lucide-react";
+import { Badge, Button, Card, Field, Input } from "@sales/ui";
+import type { DealView, NotificationView, TaskView } from "@sales/shared";
+import { useData, useAction, localDate } from "../lib/crm";
+import { Editor, FormError, selectClass } from "./editor";
+import { PageHeading } from "./page-heading";
+import { Loading, ErrorNotice } from "./feedback";
 export function Today() {
-  const user = useUser();
-  const workspace = useWorkspace();
-  if (workspace.isPending) return <Loading />;
-  if (workspace.error) return <ErrorNotice error={workspace.error} retry={() => void workspace.refetch()} />;
-  const data = workspace.data;
-  return <>
-    <PageHeading eyebrow={new Intl.DateTimeFormat('ru', { weekday: 'long', day: 'numeric', month: 'long', timeZone: data.timezone }).format(new Date()).toUpperCase()} title={`Добро пожаловать, ${user.data?.name ?? ''}`} description="Ваше пространство готово. Начните с информации о бизнесе — она станет основой для работы с клиентами." />
-    <section className="relative mb-7 overflow-hidden rounded-2xl border border-primary/15 bg-primary/5 p-7 md:p-9"><div className="relative z-10 max-w-xl"><Badge className="mb-5 bg-surface text-primary"><Sparkles className="size-3" />ПЕРВЫЕ ШАГИ</Badge><h2 className="text-2xl font-semibold tracking-tight">Всё начинается с вашего бизнеса</h2><p className="mt-3 text-sm leading-7 text-muted-foreground">Расскажите, чем вы занимаетесь и кому помогаете. Информация сохранится в вашем рабочем пространстве.</p><Button asChild className="mt-6"><Link href="/business">Настроить мой бизнес<ArrowRight className="size-4" /></Link></Button></div><BriefcaseBusiness aria-hidden className="absolute -right-5 bottom-0 size-48 -rotate-12 text-primary/10 md:right-10" /></section>
-    <div className="mb-7 grid gap-5 sm:grid-cols-3">{[
-      { Icon: BriefcaseBusiness, label: 'Рабочее пространство', value: data.name, detail: `${data.members.length} участник · изолированные данные` },
-      { Icon: Layers3, label: 'Структура продаж', value: `${data.pipelines[0]?.stages.length ?? 0} этапов`, detail: 'Начальная воронка создана' },
-      { Icon: PlugZap, label: 'Подключения', value: 'Не подключены', detail: 'Telegram пока недоступен' },
-    ].map(({ Icon, label, value, detail }) => <Card key={label}><div className="mb-4 flex items-center gap-2 text-xs text-muted-foreground"><Icon className="size-4" />{label}</div><p className="truncate text-lg font-semibold">{value}</p><p className="mt-2 text-xs text-muted-foreground">{detail}</p></Card>)}</div>
-    <div className="grid gap-7 xl:grid-cols-[1.4fr_1fr]"><Card><div className="flex items-center justify-between"><h2 className="font-semibold">Подготовка пространства</h2><Badge>1 из 3</Badge></div><ol className="mt-6 space-y-0">
-      <li className="flex gap-4 pb-6"><span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"><Check className="size-4" /></span><div><p className="text-sm font-medium">Создать рабочее пространство</p><p className="mt-1 text-xs text-muted-foreground">Аккаунт и начальная воронка готовы</p></div></li>
-      <li className="flex gap-4 border-t border-border py-6"><span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm text-primary">2</span><div><Link href="/business" className="text-sm font-medium text-primary hover:underline">Рассказать о бизнесе</Link><p className="mt-1 text-xs text-muted-foreground">Название, описание и часовой пояс</p></div></li>
-      <li className="flex gap-4 border-t border-border pt-6"><span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-sm text-muted-foreground">3</span><div><p className="text-sm font-medium">Подключить мессенджер</p><p className="mt-1 text-xs text-muted-foreground">Будет доступно после реализации Telegram Gateway</p></div></li>
-    </ol></Card><Card className="flex flex-col"><div className="mb-5 flex size-11 items-center justify-center rounded-xl bg-muted"><MessageSquare className="size-5 text-muted-foreground" /></div><h2 className="font-semibold">Место для важных диалогов</h2><p className="mt-3 text-sm leading-7 text-muted-foreground">Здесь появятся ваши задачи и напоминания. Сейчас можно настроить бизнес и посмотреть структуру воронки.</p><div className="mt-auto flex gap-2 pt-6 text-xs leading-relaxed text-muted-foreground"><ShieldCheck className="size-4 shrink-0 text-primary" />Личные переписки не будут передаваться ИИ по умолчанию.</div><Button asChild variant="outline" className="mt-5"><Link href="/pipeline">Посмотреть воронку<ArrowRight className="size-4" /></Link></Button></Card></div>
-    <p className="mt-7 flex items-center justify-center gap-2 text-xs text-muted-foreground"><CheckCheck className="size-4" />Этап Foundation · внешние сервисы пока не подключены</p>
-  </>;
+  const tasks = useData<TaskView[]>("tasks", "/tasks"),
+    notifications = useData<NotificationView[]>(
+      "notifications",
+      "/notifications",
+    ),
+    deals = useData<DealView[]>("deals", "/deals");
+  const action = useAction();
+  const [creating, setCreating] = useState(false),
+    [showDone, setShowDone] = useState(false);
+  const [form, setForm] = useState({
+    title: "",
+    dueAt: "",
+    priority: "NORMAL",
+    dealId: "",
+  });
+  const open = tasks.data?.filter((t) => !t.doneAt) ?? [];
+  const overdue = open.filter((t) => t.dueAt && new Date(t.dueAt) < new Date());
+  return (
+    <>
+      <PageHeading
+        title="Сегодня"
+        description="Задачи, договорённости и напоминания вашего рабочего пространства."
+      />
+      <div className="mb-6 grid gap-4 sm:grid-cols-3">
+        {[
+          ["Открытых задач", open.length],
+          ["Просрочено", overdue.length],
+          [
+            "Непрочитанных напоминаний",
+            notifications.data?.filter((n) => !n.readAt).length ?? 0,
+          ],
+        ].map(([title, value]) => (
+          <Card key={title}>
+            <p className="text-xs text-muted-foreground">{title}</p>
+            <p className="mt-3 text-3xl font-semibold">{value}</p>
+          </Card>
+        ))}
+      </div>
+      <div className="grid items-start gap-6 xl:grid-cols-[1.5fr_1fr]">
+        <Card>
+          <div className="mb-5 flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Мои задачи</h2>
+            <Button
+              onClick={() => {
+                setCreating(true);
+                setForm({
+                  title: "",
+                  dueAt: "",
+                  priority: "NORMAL",
+                  dealId: "",
+                });
+                action.reset();
+              }}
+            >
+              <Plus className="size-4" />
+              Новая задача
+            </Button>
+          </div>
+          <label className="mb-5 flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={showDone}
+              onChange={(e) => setShowDone(e.target.checked)}
+            />
+            Показывать завершённые
+          </label>
+          <FormError error={action.error} />
+          {tasks.isPending ? (
+            <Loading />
+          ) : tasks.error ? (
+            <ErrorNotice
+              error={tasks.error}
+              retry={() => void tasks.refetch()}
+            />
+          ) : (
+            <ul className="divide-y divide-border">
+              {tasks.data
+                .filter((t) => showDone || !t.doneAt)
+                .map((t) => (
+                  <li key={t.id} className="flex items-start gap-3 py-4">
+                    <button
+                      aria-label={
+                        t.doneAt
+                          ? `Вернуть задачу ${t.title}`
+                          : `Завершить задачу ${t.title}`
+                      }
+                      className={`mt-1 flex size-6 shrink-0 items-center justify-center rounded-full border ${t.doneAt ? "border-emerald-500 bg-emerald-500 text-white" : "border-border"}`}
+                      onClick={() =>
+                        action.mutate({
+                          path: `/tasks/${t.id}`,
+                          method: "PATCH",
+                          body: { version: t.version, done: !t.doneAt },
+                        })
+                      }
+                    >
+                      {t.doneAt && <Check className="size-4" />}
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <p
+                        className={`text-sm font-medium ${t.doneAt ? "text-muted-foreground line-through" : ""}`}
+                      >
+                        {t.title}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Badge
+                          className={
+                            !t.doneAt &&
+                            t.dueAt &&
+                            new Date(t.dueAt) < new Date()
+                              ? "text-destructive"
+                              : ""
+                          }
+                        >
+                          <Clock className="size-3" />
+                          {localDate(t.dueAt)}
+                        </Badge>
+                        {t.priority === "HIGH" && (
+                          <Badge>Высокий приоритет</Badge>
+                        )}
+                      </div>
+                      {t.conversationId && (
+                        <Link
+                          href={`/conversations?id=${t.conversationId}`}
+                          className="mt-2 inline-block text-xs text-primary"
+                        >
+                          Перейти в диалог
+                        </Link>
+                      )}
+                    </div>
+                    <button
+                      aria-label={`Удалить задачу ${t.title}`}
+                      className="p-2 text-muted-foreground"
+                      onClick={() => {
+                        if (confirm("Удалить задачу?"))
+                          action.mutate({
+                            path: `/tasks/${t.id}`,
+                            method: "DELETE",
+                          });
+                      }}
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  </li>
+                ))}
+            </ul>
+          )}
+          {tasks.data?.length === 0 && (
+            <p className="py-12 text-center text-sm text-muted-foreground">
+              Добавьте первую задачу или напоминание.
+            </p>
+          )}
+        </Card>
+        <div className="space-y-6">
+          <Card>
+            <div className="mb-5 flex items-center gap-3">
+              <Bell className="size-5 text-primary" />
+              <h2 className="font-semibold">Напоминания</h2>
+            </div>
+            {notifications.data
+              ?.filter((n) => !n.readAt)
+              .map((n) => (
+                <div key={n.id} className="mb-4 rounded-xl bg-muted p-4">
+                  <p className="text-sm">{n.title}</p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {localDate(n.createdAt)}
+                  </p>
+                  <Button
+                    variant="ghost"
+                    className="mt-2 min-h-8 text-xs"
+                    onClick={() =>
+                      action.mutate({ path: `/notifications/${n.id}/read` })
+                    }
+                  >
+                    Прочитано
+                  </Button>
+                </div>
+              ))}
+            {!notifications.data?.some((n) => !n.readAt) && (
+              <p className="text-sm text-muted-foreground">
+                Новых напоминаний нет.
+              </p>
+            )}
+          </Card>
+          <Card>
+            <h2 className="font-semibold">Продолжить работу</h2>
+            <p className="mt-3 text-sm leading-7 text-muted-foreground">
+              Откройте переписку, уточните следующий шаг и отправьте ответ после
+              своего подтверждения.
+            </p>
+            <Button asChild variant="outline" className="mt-5 w-full">
+              <Link href="/conversations">
+                К диалогам
+                <ArrowRight className="size-4" />
+              </Link>
+            </Button>
+          </Card>
+        </div>
+      </div>
+      {creating && (
+        <Editor title="Новая задача" close={() => setCreating(false)}>
+          <form
+            className="space-y-5"
+            onSubmit={(e) => {
+              e.preventDefault();
+              action.mutate(
+                {
+                  path: "/tasks",
+                  body: {
+                    title: form.title,
+                    dueAt: form.dueAt
+                      ? new Date(form.dueAt).toISOString()
+                      : null,
+                    priority: form.priority,
+                    dealId: form.dealId || null,
+                  },
+                },
+                { onSuccess: () => setCreating(false) },
+              );
+            }}
+          >
+            <Field id="task-title" label="Что нужно сделать">
+              <Input
+                id="task-title"
+                required
+                maxLength={200}
+                value={form.title}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+              />
+            </Field>
+            <Field id="task-due" label="Напомнить — время компьютера">
+              <Input
+                id="task-due"
+                type="datetime-local"
+                value={form.dueAt}
+                onChange={(e) => setForm({ ...form, dueAt: e.target.value })}
+              />
+            </Field>
+            <Field id="task-priority" label="Приоритет">
+              <select
+                id="task-priority"
+                className={selectClass}
+                value={form.priority}
+                onChange={(e) => setForm({ ...form, priority: e.target.value })}
+              >
+                <option value="LOW">Низкий</option>
+                <option value="NORMAL">Обычный</option>
+                <option value="HIGH">Высокий</option>
+              </select>
+            </Field>
+            <Field id="task-deal" label="Связать со сделкой">
+              <select
+                id="task-deal"
+                className={selectClass}
+                value={form.dealId}
+                onChange={(e) => setForm({ ...form, dealId: e.target.value })}
+              >
+                <option value="">Без сделки</option>
+                {deals.data?.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.title}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <FormError error={action.error} />
+            <Button disabled={action.isPending} type="submit">
+              Создать задачу
+            </Button>
+          </form>
+        </Editor>
+      )}
+    </>
+  );
 }

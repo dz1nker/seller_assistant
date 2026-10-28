@@ -6,6 +6,7 @@ FROM runtime AS manifests
 COPY --chown=node:node package*.json ./
 COPY --chown=node:node apps/api/package.json apps/api/package.json
 COPY --chown=node:node apps/web/package.json apps/web/package.json
+COPY --chown=node:node apps/telegram-gateway/package.json apps/telegram-gateway/package.json
 COPY --chown=node:node packages/shared/package.json packages/shared/package.json
 COPY --chown=node:node packages/database/package.json packages/database/package.json
 COPY --chown=node:node packages/ui/package.json packages/ui/package.json
@@ -34,6 +35,16 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV SALES_DOCKER_STANDALONE=true
 RUN mkdir -p apps/web/public && npm run build -w @sales/web
 
+FROM build AS gateway-build
+RUN npm run build -w @sales/telegram-gateway \
+    && mkdir -p /gateway/apps/telegram-gateway /gateway/packages/shared \
+    && cp -R apps/telegram-gateway/dist apps/telegram-gateway/package.json /gateway/apps/telegram-gateway/ \
+    && cp -R packages/shared/dist packages/shared/package.json /gateway/packages/shared/
+
+FROM manifests AS gateway-dependencies
+# Optional dependencies contain the TDLib binary for the current platform.
+RUN --mount=type=cache,id=sales-copilot-npm,target=/root/.npm,sharing=locked --mount=type=secret,id=proxy_ca if [ -f /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi; npm ci --omit=dev --omit=peer --workspace=@sales/telegram-gateway --workspace=@sales/shared --include-workspace-root=false
+
 FROM manifests AS api-dependencies
 # Required runtime peers are explicit dependencies. Prisma's CLI/TypeScript
 # peers are marked devOptional in the lockfile and need both omissions.
@@ -46,6 +57,17 @@ COPY --from=api-build --chown=node:node /runtime/ ./
 USER node
 EXPOSE 4000
 CMD ["node", "apps/api/dist/apps/api/src/main.js"]
+
+FROM runtime AS telegram-gateway
+ENV NODE_ENV=production
+ENV GATEWAY_HOST=0.0.0.0
+ENV GATEWAY_DATA_DIR=/data
+RUN mkdir -p /data && chown node:node /data && chmod 700 /data
+COPY --from=gateway-dependencies --chown=node:node /app/node_modules ./node_modules
+COPY --from=gateway-build --chown=node:node /gateway/ ./
+USER node
+EXPOSE 4101
+CMD ["node", "apps/telegram-gateway/dist/apps/telegram-gateway/src/main.js"]
 
 FROM runtime AS web
 ENV NODE_ENV=production

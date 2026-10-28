@@ -1,53 +1,49 @@
 # Архитектура Sales Copilot
 
-## Реализованный Foundation
-
 ```mermaid
 flowchart LR
-  Browser[Browser / React] -->|same origin /api + HttpOnly cookies| Next[Next.js 16]
-  Next -->|internal REST| Nest[NestJS 11]
-  Nest -->|Prisma JS + pg adapter| PG[(PostgreSQL 17)]
-  Nest -->|atomic counters / TTL| Redis[(Redis 7)]
+  Browser[React / TanStack Query] -->|same origin /api + HttpOnly cookies| Next[Next.js]
+  Next -->|REST + Socket.IO| API[NestJS]
+  API --> PG[(PostgreSQL)]
+  API --> Redis[(Redis / BullMQ)]
+  API -->|private Bearer API| Gateway[TDLib Gateway]
+  Gateway --> Telegram[Telegram MTProto]
+  Gateway -->|authenticated events| API
+  API -->|only permitted DEMO context| LLM[OpenAI-compatible API]
 ```
 
-Это модульный backend, не набор микросервисов. `InfrastructureModule` предоставляет валидированную конфигурацию, Prisma и Redis. `AuthModule` управляет регистрацией и сессиями; `WorkspacesModule` — текущим Workspace; `HealthModule` проверяет реальные зависимости. Направление зависимостей одностороннее: инфраструктура → сервисы → controllers; глобальные guards используют AuthService. Модули CRM и интеграций будут добавляться по этапам, без пустых сервисов и циклических импортов.
+Backend остаётся модульным монолитом. Отдельный Gateway изолирует нативную TDLib и сессии. Контракт `ChannelAdapter` и capabilities находятся в `packages/shared`; Instagram пока не реализован. Общие входные данные проверяет Zod, данные API всегда ограничиваются Workspace из живой серверной сессии.
 
-Контракты и схемы входных данных разделяются через `@sales/shared`. База и создание владельца — `@sales/database`. UI-компоненты `@sales/ui` следуют паттернам shadcn: Radix Slot, cva, Tailwind tokens, доступные native controls. Next.js генерирует оболочки страниц, реальные защищённые данные запрашиваются из backend через TanStack Query. Клиентский redirect — UX, а не контроль доступа. Токены не попадают в Zustand, localStorage или query cache.
+## Данные
 
-## Данные и транзакции
+Contact, Conversation и Deal — разные сущности. Имена не объединяют людей автоматически. ContactIdentity подготовлен для платформенных идентификаторов; MVP явно привязывает чат к контакту. Составные foreign keys проверяют tenant для связей контактов, продуктов, переписок, сделок, этапов и результатов AI. Stage принадлежит ровно одной Pipeline; составной FK `(stageId,pipelineId,workspaceId)` исключает противоречивую сделку.
 
-Сейчас существуют Users, Workspaces, WorkspaceMembers, Sessions, Pipelines, PipelineStages и AuditLogs. Внутренние ID — UUID. User — глобальная учётная запись; членство связывает её с несколькими Workspace. `OWNER`, `ADMIN`, `MEMBER` существуют в БД и проверяются сервером; приглашения и переключение Workspace ещё не реализованы.
+Изменения сделки используют integer version compare-and-swap. Создание/перенос сделок, правка стадий и удаление воронки используют общую блокировку Pipeline; при межвороночном переносе блокировки берутся в порядке UUID. Это сохраняет согласованность типа этапа и статуса сделки при параллельных запросах. История сохраняет снимки названий стадий. Редактирование списка стадий блокирует Pipeline и проверяет hash версии; занятый этап удаляется только с явной заменой. Успешное закрытие требует подтверждения пользователя. Nullable Decimal amount отличается от нулевой цены. DEMO-признак распространяется на сделки из демоконтактов, продуктов или чатов, аналитика считает их отдельно.
 
-Регистрация и seed создают Workspace, владельца, воронку и 7 стадий в одной транзакции. Регистрация также создаёт сессию в той же транзакции. Уникальный email предотвращает дубли; неуспех откатывает весь набор. Обновление Workspace и запись аудита транзакционны.
+`PrivacyEngine` контролирует чтение, импорт, отправку и AI. CANDIDATE/EXCLUDED сохраняют только метаданные; CLIENT разрешает содержимое в CRM. При исключении очищаются сообщения, анализы/варианты/usage, задачи и связи сделок; минимальные command digests сохраняются для предотвращения повторной отправки. Gateway получает whitelist выбранных чатов, API повторно проверяет актуальную политику перед записью каждого события. Периодическая уборка удаляет сообщения старше retentionDays и производные анализы.
 
-В бизнес-сущностях есть `workspaceId`. Составной foreign key `(pipelineId, workspaceId)` не позволяет создать стадию воронки другого Workspace. Сессия ссылается на живое членство `(workspaceId, userId)`, поэтому удаление членства удаляет связанные сессии. Обычные foreign keys на User/Workspace также каскадные. В аудит записывается идентификатор актёра, а не пароль или входные данные.
+## Отправка и восстановление
 
-`GET/PATCH /workspaces/current` выбирают tenant только из проверенной серверной сессии. Переданные заголовки, query-параметры и поля тела не могут изменить его. Запись разрешена OWNER/ADMIN. Чтение отдаёт явный select безопасных полей.
+Manual send создаёт MessageCommand и Message в транзакции, с блокировкой политики Conversation. Уникальный `(workspaceId,key)` и hash payload обеспечивают идемпотентность HTTP. BullMQ содержит только ID команды; PostgreSQL outbox остаётся источником истины после потери Redis. Очередь восстанавливается polling по PENDING/SENDING; имена очередей изолированы по БД, тестовые workers не забирают production-команды.
 
-## Сессии
+Перед нативным sendMessage Gateway сохраняет intent в SQLite. Одновременные запросы одного ID сериализуются. Журнал содержит hash, attempt, временный и окончательный ID; текст команды отдельно не записывается. Pending TDLib не считается SENT: требуется `updateMessageSendSucceeded`. Известный отказ может быть повторён только новой ручной попыткой; таймаут/неоднозначный сбой становится UNCERTAIN и не разрешает слепого повтора. При перезапуске незавершённый intent считается UNCERTAIN, source events могут уточнить результат. Потеря журнала при resume также не приводит к повторной отправке.
 
-Opaque access/refresh tokens: 256 случайных бит каждый. Cookies `sc_access`, `sc_refresh`: HttpOnly, SameSite=Strict, Path=/api, Secure при HTTPS. В БД только SHA-256 token digests. Access действует 15 минут, абсолютный срок сессии — 7 дней. Refresh атомарно меняет оба хеша с условием на предыдущий refresh hash и expiry. В гонке выигрывает ровно один запрос; старый access немедленно недействителен. Frontend объединяет одновременные refresh-запросы внутри одной вкладки. Logout удаляет сессию и cookies.
+Входящие/исходящие сообщения официального клиента, edit/delete и send confirmation проходят один pipeline. IntegrationEvent dedupe и уникальный source ID предотвращают дубли. Историческая синхронизация не увеличивает счётчик новых непрочитанных сообщений. WebSocket события несут идентификаторы, UI заново читает API; reconnect/refresh не выполняет send. Socket.IO использует polling с возможностью websocket upgrade через same-origin Next proxy. При reconnect клиент проверяет сессию через HTTP, обновляет истёкший access cookie через refresh и перечитывает данные, пропущенные во время разрыва.
 
-При логине выбирается самое раннее доступное членство. Изменение роли применяется при следующем запросе, без повторного входа. Проверка Origin обязательна для изменяющих запросов; произвольный cross-origin CORS не включён. Redis хранит атомарные expiring rate-limit counters, не пароли/токены.
+## Gateway и секреты
 
-## Миграции и сборка
+`tdl` + закреплённая prebuilt TDLib; `use_secret_chats=false`, `use_message_database=false`, `use_file_database=false`. Каждая пара Workspace/Connection имеет свой каталог и 32-byte HKDF encryption key. TDLib database шифруется своим native механизмом; callback outbox шифруется AES-256-GCM. Master key хранится в env отдельно от volume. Коды/2FA-пароли передаются только текущему auth step и не записываются. Нативные логи подавлены, API ошибки редактируются.
 
-Prisma 7 работает через `@prisma/adapter-pg`; нативный query engine не нужен. `generate-client.mjs` использует закреплённый внутренний генератор Prisma/WASM из npm, без скачивания ненужного schema engine. Это осознанная зависимость от внутреннего API; lockfile и тесты обязательны при обновлении.
+Gateway не опубликован на хосте Compose. Все private routes требуют constant-time Bearer token, callback API проверяет тот же token и tenant IDs. Health загружает настоящую нативную библиотеку и не требует Telegram API credentials. Без credentials подключение честно недоступно.
 
-SQL-миграции применяет `scripts/migrate.mjs`: advisory lock на соединение, контроль SHA-256 применённых файлов, транзакция для каждой миграции. Таблица `_sales_migrations` — единственный журнал. Prisma Migrate не используется; перед переходом на него потребуется отдельный проверенный baseline, не простое выполнение `prisma migrate deploy`.
+## AI
 
-Общие Node-пакеты компилируются в CommonJS до API. Next.js компилирует UI. npm lockfile используется в `npm ci`; Docker-образы PostgreSQL/Redis и базовый Node закрепляются digest. Живые процессы после публикации облачной среды должны запускаться заново.
+`AiService` строит контекст только после `PrivacyEngine.ai`: разрешён исключительно DEMO + CLIENT. Telegram по умолчанию запрещён, bypass отсутствует. Контекст включает последние допустимые сообщения с UUID, ограниченные продукты/материалы бизнеса, сделки и стадии. Hash версии учитывает изменения сообщений, бизнеса, продуктов, знаний, сделок и стадий; во время generation и при применении версия проверяется повторно.
 
-Docker разделяет build и runtime. Полный набор зависимостей устанавливается только в build-stage. В API runtime устанавливаются production-зависимости выбранных workspaces и корня, а optional peer-only CLI Prisma/TypeScript (`devOptional` в lockfile) исключаются через `--omit=dev --omit=peer --omit=optional`; необходимые runtime peers перечислены явно. Готовый Prisma-клиент копируется из проверенной стадии генерации. SQL-миграции запускаются обычным Node.js. Web использует Next.js standalone, который включается только флагом `SALES_DOCKER_STANDALONE=true` в Docker build; host/dev команды сохраняют прежний режим. npm cache хранится в BuildKit cache mount; сборочные и тестовые зависимости не экспортируются в рабочие образы.
+Провайдеры: disabled, явно подписанный rule-based demo, OpenAI-compatible Structured Outputs. System prompt отделяет инструкции от недоверенного JSON-контекста; модель не получает tools или доступ к sendMessage. Zod проверяет output и provenance подтверждённых фактов. Public reasoning_summary содержит короткое обоснование, не внутреннюю цепочку рассуждений. APPLIED/REJECTED/SENT различаются; SENT ставится после подтверждения исходящего сообщения, edited сравнивает отправленный текст с вариантом. Usage сохраняется только при наличии от провайдера, цена может быть неизвестна.
 
-## Следующие архитектурные границы
+## Auth и сборка
 
-На этапе 2 отдельно моделируются Contact, Conversation и Deal. Нельзя объединять людей по имени. В каждой сущности и запросе проверяется Workspace; стадии и сделки получают составные ограничения. Канбан будет использовать dnd-kit и backend-транзакцию с историей, с откатом optimistic update при ошибке.
+Opaque access/refresh tokens сохраняются в HttpOnly/SameSite=Strict cookies Path=/api; в PostgreSQL только хеши. Access 15 минут, абсолютный refresh 7 дней. Refresh CAS отзывает старый access и socket, logout отзывает сессию. Socket handshake требует разрешённый Origin/Referer и живое членство; таймер ограничен сроком сессии. Клиентский redirect не заменяет API authorization.
 
-Privacy Engine должен быть единственным входом для сохранения/чтения содержимого диалогов. EXCLUDED не хранит текст, не индексируется и не создаёт сделки; CANDIDATE хранит только минимальные метаданные; CLIENT разрешает CRM по политике, но **не автоматически LLM**. Переход в EXCLUDED должен очищать зависимые данные и производные результаты.
-
-Telegram Gateway (этап 3) — отдельный процесс TDLib. CRM общается с типизированным `MessagingChannelAdapter` и capabilities; Instagram не наследует возможностей Telegram по умолчанию. Идемпотентная команда отправки и её хеш текста сохраняются до обращения к TDLib. Принятие команды ≠ отправленное сообщение: `pending → sending → sent/failed` согласуется с source events; неоднозначный сбой не разрешает слепую повторную отправку. После перезапуска выполняется reconciliation по источнику/чату/message ID. Секретные/защищённые сообщения не импортируются.
-
-AI Service (этап 4) принимает только разрешённый контекст от Privacy Engine и AIPolicyGuard. Реальный Telegram по умолчанию запрещён. Права/политика источника должны быть документированы, без глобального флага обхода. Контекст имеет версию и provenance фактов; внешние тексты считаются данными, не инструкциями. Выход проверяется Zod; рекомендации сохраняются с prompt/provider/usage и признаком устаревания. У AI Service не будет зависимости от метода отправки сообщений.
-
-BullMQ и WebSocket Gateway добавляются при реализации фоновых задач/событий, с изоляцией по Workspace, авторизацией подключения и reconnect/replay. Они ещё не присутствуют в Foundation. Redis сейчас используется для rate limiting, а не как фиктивная очередь.
+SQL-runner применяет immutable checksum migrations в транзакциях. Prisma 7 JS client генерируется закреплённым WASM-генератором из npm. Node.js 24 нужен также для SQLite Gateway. Docker runtime отделён от build: API production deps/JS/Prisma/SQL, web standalone, Gateway production SDK + нативная библиотека. Telegram volume и ключи нельзя терять при обновлении. Единственный API instance и локальные volumes — текущая граница развёртывания; горизонтальное масштабирование требует распределённого Socket.IO adapter, session ownership и отдельной миграционной процедуры.
