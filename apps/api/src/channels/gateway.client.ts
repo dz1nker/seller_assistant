@@ -2,6 +2,7 @@ import {
   HttpException,
   Inject,
   Injectable,
+  Logger,
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { z } from "zod";
@@ -35,6 +36,7 @@ export const gatewayMessageSchema = z.object({
 });
 @Injectable()
 export class TelegramAdapter implements ChannelAdapter {
+  private logger = new Logger("TelegramGateway");
   constructor(@Inject(AppConfig) private config: AppConfig) {}
   getCapabilities() {
     return { text: true, replies: true, attachments: false };
@@ -67,16 +69,71 @@ export class TelegramAdapter implements ChannelAdapter {
       if (!r.ok) {
         const e = z
           .object({ message: z.string().max(300) })
-          .safeParse(await r.json());
+          .safeParse(await r.json().catch(() => null));
+        const unauthorized =
+          r.status === 403 && e.success && e.data.message === "Доступ запрещён";
+        if (unauthorized)
+          this.logger.warn(
+            JSON.stringify({
+              event: "gateway_request_failed",
+              reason: "INTERNAL_TOKEN_MISMATCH",
+            }),
+          );
         throw new HttpException(
-          e.success ? e.data.message : "Telegram Gateway временно недоступен",
+          unauthorized
+            ? "Служебные ключи API и Telegram Gateway не совпадают. Примените настройки обоих сервисов через Docker Compose."
+            : e.success
+              ? e.data.message
+              : "Telegram Gateway временно недоступен",
           r.status >= 400 && r.status < 500 ? r.status : 503,
         );
       }
-      return await r.json();
+      try {
+        return await r.json();
+      } catch {
+        this.logger.warn(
+          JSON.stringify({
+            event: "gateway_request_failed",
+            reason: "INVALID_JSON_RESPONSE",
+          }),
+        );
+        throw new ServiceUnavailableException(
+          "Telegram Gateway вернул некорректный ответ.",
+        );
+      }
     } catch (e) {
       if (e instanceof HttpException) throw e;
-      throw new ServiceUnavailableException("Нет связи с Telegram Gateway");
+      const error =
+        e && typeof e === "object"
+          ? (e as { name?: unknown; cause?: { code?: unknown } })
+          : {};
+      const code = error.cause?.code;
+      let reason = "TRANSPORT_ERROR",
+        message = "Нет связи с Telegram Gateway";
+      if (error.name === "TimeoutError" || error.name === "AbortError") {
+        reason = "REQUEST_TIMEOUT";
+        message =
+          "Telegram Gateway не ответил вовремя. Проверьте журнал telegram-gateway.";
+      } else if (code === "ECONNREFUSED") {
+        reason = "CONNECTION_REFUSED";
+        message =
+          "Telegram Gateway не принимает соединение. Проверьте состояние контейнера telegram-gateway.";
+      } else if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+        reason = "DNS_ERROR";
+        message = "API не может найти Telegram Gateway в сети Docker.";
+      } else if (
+        code === "ECONNRESET" ||
+        code === "UND_ERR_SOCKET" ||
+        code === "EPIPE"
+      ) {
+        reason = "CONNECTION_CLOSED";
+        message =
+          "Соединение с Telegram Gateway было закрыто. Проверьте журнал telegram-gateway.";
+      }
+      this.logger.warn(
+        JSON.stringify({ event: "gateway_request_failed", reason }),
+      );
+      throw new ServiceUnavailableException(message);
     }
   }
   prefix(ws: string, id: string) {

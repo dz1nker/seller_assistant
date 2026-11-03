@@ -112,3 +112,9 @@ PLAYWRIGHT_NO_SANDBOX=true XDG_CONFIG_HOME=/tmp/sales-chromium-config XDG_CACHE_
 Проверены 6 unit-тестов диагностики и настоящий изолированный Docker/PostgreSQL smoke `node tests/windows/repair-db-auth-smoke.mjs`: намеренно расходящиеся пароль БД и env, отказ TCP-аутентификации до восстановления, успешный вход после, сохранение контрольной записи, повторный запуск, отсутствие паролей в выводе/журнале. Проверен также stdin с CRLF через нормализацию `tr -d '\r'`, используемую в PowerShell-инструкции. Native Windows launcher по-прежнему требует проверки на Windows. Smoke использует отдельный контейнер с tmpfs, без host ports/named volumes; рабочая БД не менялась.
 
 `scripts/migrate.mjs` сохраняет исходные checksum checks, advisory lock и транзакции; ошибки теперь содержат безопасные SQLSTATE/фазу/имя миграции и фиксированное объяснение без raw message/detail/SQL/connection URL. Клиент закрывается и при отказе соединения; CLI использует fileURLToPath для путей с пробелами/Windows.
+
+## Telegram auth diagnostics — 3 ноября 2026
+
+Авторизация TDLib больше не удерживает HTTP-запрос API до ответа Telegram (у API лимит 20 секунд, у Next proxy — 30). Команда принимается один раз, Gateway возвращает AUTHORIZING и сообщает результат через существующий status polling/events. Локальный pending Promise не сохраняется на диск; номер, коды и пароль не попадают в журнал приложения. READY появляется только из настоящего authorizationStateReady.
+
+Добавлены разрешённые категории ошибок Telegram и различение HTTP timeout/DNS/refused/closed/token mismatch/invalid JSON между API и Gateway. Журнал содержит фиксированные event/reason и числовой код, без raw TDLib error message, credentials или payload. Пройдены 40 unit-тестов, включая native TDLib loading, отложенный ответ/отказ, дедупликацию auth step и редактирование ошибок; общий typecheck, build API и Gateway. Живая авторизация пользователя остаётся непроверенной без его локальной попытки.

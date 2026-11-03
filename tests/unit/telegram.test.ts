@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,6 +17,7 @@ class FakeNative implements NativeClient {
   sent: TdObject[] = [];
   closed = false;
   reject?: unknown;
+  authOperation?: () => Promise<unknown>;
   on(event: "update" | "error", listener: (v: unknown) => void) {
     this.listeners.set(event, listener);
   }
@@ -32,6 +33,8 @@ class FakeNative implements NativeClient {
   async invoke(q: TdObject) {
     if (q._ === "getMe") return { id: 123 };
     if (q._ === "getChat") return { id: 42, type: { _: "chatTypePrivate" } };
+    if (q._ === "setAuthenticationPhoneNumber" && this.authOperation)
+      return this.authOperation();
     if (q._ === "checkAuthenticationCode" && q.code === "wrong")
       throw { code: 400, message: "PHONE_CODE_INVALID sensitive-value" };
     if (q._ === "sendMessage") {
@@ -108,15 +111,86 @@ describe("TDLib adapter and durable journal", () => {
       _: "updateAuthorizationState",
       authorization_state: { _: "authorizationStateWaitCode" },
     });
-    await expect(f.gateway.auth(f.ws, f.id, "code", "wrong")).rejects.toThrow(
-      "Неверный код Telegram",
+    expect((await f.gateway.auth(f.ws, f.id, "code", "wrong")).state).toBe(
+      "AUTHORIZING",
     );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(f.gateway.status(f.ws, f.id).error).toBe("Неверный код Telegram");
     expect(JSON.stringify(f.gateway.status(f.ws, f.id))).not.toContain(
       "sensitive-value",
     );
     await expect(
       f.gateway.auth(f.ws, f.id, "password", "private"),
     ).rejects.toThrow("Шаг авторизации изменился");
+  });
+  it("returns a pending auth status without waiting for TDLib and submits the step only once", async () => {
+    const f = fixture();
+    await f.gateway.connect(f.ws, f.id);
+    f.client.update({
+      _: "updateAuthorizationState",
+      authorization_state: { _: "authorizationStateWaitPhoneNumber" },
+    });
+    let complete!: (v: unknown) => void;
+    let count = 0;
+    f.client.authOperation = () => {
+      count++;
+      return new Promise((resolve) => {
+        complete = resolve;
+      });
+    };
+    expect(
+      (await f.gateway.auth(f.ws, f.id, "phone", "fixture-phone")).state,
+    ).toBe("AUTHORIZING");
+    await expect(
+      f.gateway.auth(f.ws, f.id, "phone", "fixture-phone"),
+    ).rejects.toThrow("ещё выполняется");
+    expect(count).toBe(1);
+    f.client.update({
+      _: "updateAuthorizationState",
+      authorization_state: { _: "authorizationStateWaitCode" },
+    });
+    complete({});
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(f.gateway.status(f.ws, f.id).state).toBe("WAIT_CODE");
+  });
+  it("reports a delayed native auth failure without storing credentials or logging raw errors", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const f = fixture();
+      await f.gateway.connect(f.ws, f.id);
+      f.client.update({
+        _: "updateAuthorizationState",
+        authorization_state: { _: "authorizationStateWaitPhoneNumber" },
+      });
+      let fail!: (v: unknown) => void;
+      f.client.authOperation = () =>
+        new Promise((_r, reject) => {
+          fail = reject;
+        });
+      await f.gateway.auth(f.ws, f.id, "phone", "private-phone-value");
+      fail({ code: 400, message: "API_ID_INVALID private-hash-value" });
+      await new Promise((resolve) => setImmediate(resolve));
+      const status = f.gateway.status(f.ws, f.id);
+      expect(status.state).toBe("WAIT_PHONE");
+      expect(status.error).toContain("API ID/API hash");
+      expect(warn).toHaveBeenCalledWith(
+        JSON.stringify({
+          event: "telegram_auth_failed",
+          step: "phone",
+          code: 400,
+          reason: "API_ID_INVALID",
+        }),
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(
+        "private-hash-value",
+      );
+      expect(JSON.stringify(status)).not.toContain("private-phone-value");
+      expect(
+        readFileSync(path.join(f.root, "journal.sqlite-wal")).toString(),
+      ).not.toContain("private-phone-value");
+    } finally {
+      warn.mockRestore();
+    }
   });
   it("serializes duplicate commands and waits for TDLib success before SENT", async () => {
     const f = fixture();

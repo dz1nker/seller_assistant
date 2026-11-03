@@ -22,6 +22,7 @@ import {
   normalizeMessage,
   object,
   safeError,
+  telegramErrorInfo,
   text,
   type NativeClient,
   type NativeFactory,
@@ -51,6 +52,7 @@ type Session = {
   online: boolean;
   link?: string;
   error?: string;
+  authPending?: Promise<void>;
   accountId?: string;
   allowed: Set<string>;
   early: Map<string, unknown>;
@@ -254,8 +256,21 @@ export class TelegramGateway {
       early: new Map(),
     };
     this.sessions.set(id, s);
-    client.on("error", () => {
-      s.error = "Сбой TDLib. Проверьте подключение";
+    client.on("error", (error) => {
+      const info = telegramErrorInfo(error);
+      s.error =
+        info.reason === "UNCLASSIFIED"
+          ? "Сбой TDLib. Проверьте подключение"
+          : info.message;
+      if (client.isClosed()) s.auth = "CLOSED";
+      console.warn(
+        JSON.stringify({
+          event: "tdlib_client_error",
+          state: s.auth,
+          code: info.code ?? null,
+          reason: info.reason,
+        }),
+      );
     });
     client.on("update", (u) => {
       void this.update(s, u).catch(() => {
@@ -267,7 +282,11 @@ export class TelegramGateway {
   status(ws: string, id: string) {
     const s = this.session(ws, id);
     return {
-      state: s.auth === "READY" && !s.online ? "RECONNECTING" : s.auth,
+      state: s.authPending
+        ? "AUTHORIZING"
+        : s.auth === "READY" && !s.online
+          ? "RECONNECTING"
+          : s.auth,
       ...(s.link ? { link: s.link } : {}),
       ...(s.error ? { error: s.error } : {}),
       ...(s.accountId ? { accountId: s.accountId } : {}),
@@ -275,6 +294,11 @@ export class TelegramGateway {
   }
   async auth(ws: string, id: string, kind: string, value: string) {
     const s = this.session(ws, id);
+    if (s.authPending)
+      throw new GatewayError(
+        409,
+        "Предыдущий шаг авторизации ещё выполняется. Дождитесь ответа Telegram.",
+      );
     const expected: Record<string, string> = {
       phone: "WAIT_PHONE",
       code: "WAIT_CODE",
@@ -310,14 +334,43 @@ export class TelegramGateway {
       default:
         throw new GatewayError(400, "Неподдерживаемый шаг");
     }
-    try {
-      s.error = undefined;
-      await s.client.invoke(query);
-      return this.status(ws, id);
-    } catch (e) {
-      s.error = safeError(e);
-      throw new GatewayError(400, s.error);
-    }
+    // TDLib may wait for a remote response longer than the HTTP proxy timeout.
+    // Submit once and report progress through the existing status polling.
+    s.error = undefined;
+    s.authPending = Promise.resolve()
+      .then(() => s.client.invoke(query))
+      .then(() => undefined)
+      .catch((error) => {
+        if (this.closing || this.sessions.get(id) !== s) return;
+        const info = telegramErrorInfo(error);
+        s.error = info.message;
+        console.warn(
+          JSON.stringify({
+            event: "telegram_auth_failed",
+            step: kind,
+            code: info.code ?? null,
+            reason: info.reason,
+          }),
+        );
+      })
+      .finally(() => {
+        s.authPending = undefined;
+        if (!this.closing && this.sessions.get(id) === s) {
+          try {
+            this.emit(s, { kind: "status", state: this.status(ws, id).state });
+          } catch {
+            s.error =
+              "Не удалось сохранить состояние авторизации. Проверьте хранилище Gateway.";
+            console.warn(
+              JSON.stringify({
+                event: "telegram_auth_status_failed",
+                reason: "PERSISTENCE_ERROR",
+              }),
+            );
+          }
+        }
+      });
+    return this.status(ws, id);
   }
   allow(ws: string, id: string, ids: string[]) {
     const s = this.session(ws, id);

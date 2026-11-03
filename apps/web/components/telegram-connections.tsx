@@ -10,6 +10,7 @@ import { useUser } from "../lib/queries";
 import { FormError } from "./editor";
 const labels: Record<string, string> = {
   STARTING: "Подготовка",
+  AUTHORIZING: "Ожидаем ответ Telegram…",
   WAIT_PHONE: "Номер телефона",
   WAIT_CODE: "Код Telegram",
   WAIT_PASSWORD: "Двухфакторный пароль",
@@ -159,6 +160,11 @@ function TelegramAccount({
           </Button>
         )}
       </div>
+      {state === "AUTHORIZING" && (
+        <p className="mt-4 text-sm text-muted-foreground">
+          Следующий шаг появится здесь после ответа Telegram.
+        </p>
+      )}
       {kind && canEdit && (
         <form
           className="mt-5 flex items-end gap-3"

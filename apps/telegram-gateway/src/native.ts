@@ -75,17 +75,72 @@ export function authState(value: unknown) {
     )[name] ?? "STARTING"
   );
 }
-export function safeError(error: unknown) {
+const authErrors: Record<string, string> = {
+  API_ID_INVALID:
+    "Telegram отклонил API ID/API hash. Проверьте, что оба значения взяты из одного приложения на my.telegram.org/apps.",
+  API_HASH_INVALID:
+    "Telegram отклонил API hash. Проверьте настройки приложения на my.telegram.org/apps.",
+  API_ID_PUBLISHED_FLOOD:
+    "Telegram ограничил использование этих API credentials. Используйте собственное приложение с my.telegram.org/apps.",
+  PHONE_NUMBER_INVALID:
+    "Проверьте номер телефона: международный формат, код страны и номер.",
+  PHONE_NUMBER_BANNED:
+    "Telegram заблокировал этот номер. Проверьте доступ в официальном приложении Telegram.",
+  PHONE_NUMBER_FLOOD:
+    "Telegram ограничил попытки входа для этого номера. Подождите перед следующей попыткой.",
+  PHONE_PASSWORD_FLOOD:
+    "Telegram ограничил попытки ввода пароля. Подождите перед следующей попыткой.",
+  PHONE_CODE_INVALID: "Неверный код Telegram",
+  PHONE_CODE_EMPTY: "Введите код Telegram.",
+  PHONE_CODE_EXPIRED: "Код Telegram истёк. Начните авторизацию заново.",
+  PASSWORD_HASH_INVALID: "Неверный пароль двухфакторной защиты",
+  EMAIL_ADDRESS_INVALID: "Проверьте адрес email для авторизации.",
+  EMAIL_CODE_INVALID: "Неверный код email",
+  EMAIL_CODE_EXPIRED: "Код email истёк. Начните авторизацию заново.",
+  UPDATE_APP_TO_LOGIN:
+    "Telegram требует обновить клиентскую библиотеку TDLib для входа.",
+  AUTH_RESTART: "Telegram запросил начать авторизацию заново.",
+};
+export function telegramErrorInfo(error: unknown) {
   const e = object(error),
     m = text(e.message);
-  if (m.includes("PHONE_CODE_INVALID")) return "Неверный код Telegram";
-  if (m.includes("PASSWORD_HASH_INVALID"))
-    return "Неверный пароль двухфакторной защиты";
-  if (m.includes("EMAIL_CODE_INVALID")) return "Неверный код email";
-  if (m.includes("PHONE_NUMBER_INVALID")) return "Проверьте номер телефона";
-  if (m.includes("FLOOD_WAIT"))
-    return "Telegram ограничил частоту запросов. Подождите перед повтором.";
-  return "Telegram не выполнил операцию. Проверьте подключение и текущий шаг авторизации.";
+  const code =
+    typeof e.code === "number" &&
+    Number.isSafeInteger(e.code) &&
+    e.code >= 0 &&
+    e.code <= 9999
+      ? e.code
+      : undefined;
+  for (const [reason, message] of Object.entries(authErrors))
+    if (m.includes(reason)) return { code, reason, message };
+  if (m.includes("FLOOD_WAIT") || code === 429)
+    return {
+      code,
+      reason: "FLOOD_WAIT",
+      message: "Telegram ограничил частоту запросов. Подождите перед повтором.",
+    };
+  if (/timeout(?: expired)?|timed out/i.test(m))
+    return {
+      code,
+      reason: "TDLIB_TIMEOUT",
+      message:
+        "Не удалось дождаться ответа Telegram. Проверьте доступ к Telegram из Docker.",
+    };
+  if (/client is closed/i.test(m))
+    return {
+      code,
+      reason: "CLIENT_CLOSED",
+      message: "Сессия TDLib закрыта. Начните подключение заново.",
+    };
+  return {
+    code,
+    reason: "UNCLASSIFIED",
+    message:
+      "Telegram не выполнил операцию. Проверьте подключение и текущий шаг авторизации.",
+  };
+}
+export function safeError(error: unknown) {
+  return telegramErrorInfo(error).message;
 }
 export function normalizeMessage(value: unknown) {
   const m = object(value),
