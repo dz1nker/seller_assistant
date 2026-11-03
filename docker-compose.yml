@@ -67,6 +67,7 @@ services:
       SESSION_MASTER_KEY: ${SESSION_MASTER_KEY:?Run environment initializer}
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      TELEGRAM_PROXY_URL: ${TELEGRAM_PROXY_URL:-}
       API_INTERNAL_URL: http://api:4000
     volumes: ["telegramdata:/data"]
     healthcheck:

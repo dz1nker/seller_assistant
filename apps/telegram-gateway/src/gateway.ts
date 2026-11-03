@@ -27,11 +27,13 @@ import {
   type NativeClient,
   type NativeFactory,
 } from "./native";
+import { proxyQuery, type TelegramProxy } from "./proxy";
 export interface GatewayOptions {
   root: string;
   masterKey: string;
   apiId?: number;
   apiHash?: string;
+  proxy?: TelegramProxy;
   callbackUrl: string;
   token: string;
 }
@@ -50,6 +52,8 @@ type Session = {
   client: NativeClient;
   auth: string;
   online: boolean;
+  networkConfigured: boolean;
+  networkError?: string;
   link?: string;
   error?: string;
   authPending?: Promise<void>;
@@ -255,6 +259,7 @@ export class TelegramGateway {
       client,
       auth: "STARTING",
       online: true,
+      networkConfigured: false,
       allowed: new Set(allowed),
       early: new Map(),
     };
@@ -280,6 +285,40 @@ export class TelegramGateway {
         s.error = "Ошибка обработки события Telegram";
       });
     });
+    // This is a local TDLib setting, not a check that the remote proxy works.
+    // Apply it to every restored session before exposing login or READY.
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        client.invoke(proxyQuery(this.config.proxy)),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("PROXY_SETUP_TIMEOUT")),
+            10000,
+          );
+        }),
+      ]);
+      s.networkConfigured = true;
+      console.info(
+        JSON.stringify({
+          event: "telegram_proxy_configured",
+          type: this.config.proxy?.type._ ?? "direct",
+        }),
+      );
+    } catch (error) {
+      s.networkError =
+        "Не удалось применить настройки прокси TDLib. Проверьте TELEGRAM_PROXY_URL в .env и перезапустите Telegram Gateway.";
+      const info = telegramErrorInfo(error);
+      console.warn(
+        JSON.stringify({
+          event: "telegram_proxy_failed",
+          code: info.code ?? null,
+          reason: info.reason,
+        }),
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
     return this.status(ws, id);
   }
   status(ws: string, id: string) {
@@ -296,15 +335,19 @@ export class TelegramGateway {
       ? offline
         ? "За 60 секунд TDLib не установил соединение с Telegram. Проверьте доступ контейнера к сети Telegram. Повторный запрос автоматически не отправляется."
         : "Telegram не подтвердил шаг авторизации за 60 секунд. Результат пока неизвестен; проверьте официальный Telegram и журнал Gateway. Повторный запрос автоматически не отправляется."
-      : s.error;
+      : (s.networkError ?? s.error);
     return {
-      state: timedOut
-        ? "AUTH_TIMEOUT"
-        : awaiting
-          ? "AUTHORIZING"
-          : s.auth === "READY" && !s.online
-            ? "RECONNECTING"
-            : s.auth,
+      state: !s.networkConfigured
+        ? s.networkError
+          ? "UNAVAILABLE"
+          : "STARTING"
+        : timedOut
+          ? "AUTH_TIMEOUT"
+          : awaiting
+            ? "AUTHORIZING"
+            : s.auth === "READY" && !s.online
+              ? "RECONNECTING"
+              : s.auth,
       ...(s.link ? { link: s.link } : {}),
       ...(error ? { error } : {}),
       ...(s.accountId ? { accountId: s.accountId } : {}),
@@ -312,6 +355,11 @@ export class TelegramGateway {
   }
   async auth(ws: string, id: string, kind: string, value: string) {
     const s = this.session(ws, id);
+    if (!s.networkConfigured)
+      throw new GatewayError(
+        409,
+        s.networkError ?? "Дождитесь применения настроек соединения Telegram.",
+      );
     if (s.authPending && s.auth === s.authFromState)
       throw new GatewayError(
         409,

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { idSchema } from "@sales/shared";
 import { TelegramGateway, GatewayError } from "./gateway";
 import { nativeInfo } from "./native";
+import { parseTelegramProxy } from "./proxy";
 config({ path: path.resolve(process.cwd(), "../../.env"), quiet: true });
 config({ path: path.resolve(process.cwd(), ".env"), quiet: true });
 process.umask(0o077);
@@ -33,11 +34,13 @@ const env = z
   })
   .parse(process.env);
 const info = nativeInfo();
+const proxy = parseTelegramProxy(process.env.TELEGRAM_PROXY_URL);
 const gateway = new TelegramGateway({
   root: env.GATEWAY_DATA_DIR,
   masterKey: env.SESSION_MASTER_KEY,
   apiId: env.TELEGRAM_API_ID,
   apiHash: env.TELEGRAM_API_HASH,
+  proxy,
   callbackUrl:
     env.API_INTERNAL_URL.replace(/\/$/, "") + "/internal/channel-events",
   token: env.GATEWAY_TOKEN,
@@ -84,6 +87,7 @@ const server = createServer(async (req, res) => {
           ...(!env.TELEGRAM_API_HASH ? ["TELEGRAM_API_HASH"] : []),
         ],
         tdlib: info.version,
+        proxy: { enabled: Boolean(proxy), type: proxy?.type._ ?? "direct" },
       });
     const match = /^\/sessions\/([^/]+)\/([^/]+)(?:\/(.*))?$/.exec(
       url.pathname,

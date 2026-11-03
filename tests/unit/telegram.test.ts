@@ -3,7 +3,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { TelegramGateway } from "../../apps/telegram-gateway/src/gateway";
+import {
+  TelegramGateway,
+  type GatewayOptions,
+} from "../../apps/telegram-gateway/src/gateway";
+import { parseTelegramProxy } from "../../apps/telegram-gateway/src/proxy";
 import {
   nativeInfo,
   normalizeMessage,
@@ -18,6 +22,8 @@ class FakeNative implements NativeClient {
   closed = false;
   reject?: unknown;
   authOperation?: (query: TdObject) => Promise<unknown>;
+  proxyOperation?: (query: TdObject) => Promise<unknown>;
+  queries: TdObject[] = [];
   on(event: "update" | "error", listener: (v: unknown) => void) {
     this.listeners.set(event, listener);
   }
@@ -31,6 +37,12 @@ class FakeNative implements NativeClient {
     this.listeners.get("update")?.(v);
   }
   async invoke(q: TdObject) {
+    this.queries.push(q);
+    if (
+      ["addProxy", "disableProxy"].includes(String(q._)) &&
+      this.proxyOperation
+    )
+      return this.proxyOperation(q);
     if (q._ === "getMe") return { id: 123 };
     if (q._ === "getChat") return { id: 42, type: { _: "chatTypePrivate" } };
     if (
@@ -59,7 +71,7 @@ afterEach(async () => {
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
 });
-function fixture(root?: string) {
+function fixture(root?: string, options: Partial<GatewayOptions> = {}) {
   root ??= mkdtempSync(path.join(tmpdir(), "sales-telegram-test-"));
   if (!roots.includes(root)) roots.push(root);
   const client = new FakeNative();
@@ -71,6 +83,7 @@ function fixture(root?: string) {
       apiHash: "b".repeat(32),
       callbackUrl: "http://127.0.0.1:1/events",
       token: "test-only-token",
+      ...options,
     },
     () => client,
   );
@@ -94,6 +107,109 @@ const message = (id: number) => ({
   content: { _: "messageText", text: { text: "Тестовый ответ" } },
 });
 describe("TDLib adapter and durable journal", () => {
+  it("blocks auth and READY until the explicit proxy is applied", async () => {
+    const proxy = parseTelegramProxy("socks5://proxy.example:1080");
+    const f = fixture(undefined, { proxy });
+    let finish!: (v: unknown) => void;
+    f.client.proxyOperation = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    const connecting = f.gateway.connect(f.ws, f.id);
+    f.client.update({
+      _: "updateAuthorizationState",
+      authorization_state: { _: "authorizationStateWaitPhoneNumber" },
+    });
+    expect(f.gateway.status(f.ws, f.id).state).toBe("STARTING");
+    await expect(
+      f.gateway.auth(f.ws, f.id, "phone", "private-phone"),
+    ).rejects.toThrow("применения настроек");
+    f.client.update({
+      _: "updateAuthorizationState",
+      authorization_state: { _: "authorizationStateReady" },
+    });
+    expect(f.gateway.status(f.ws, f.id).state).toBe("STARTING");
+    finish({});
+    await connecting;
+    expect(f.gateway.status(f.ws, f.id).state).toBe("READY");
+    expect(f.client.queries[0]).toEqual({
+      _: "addProxy",
+      proxy: { _: "proxy", ...proxy },
+      enable: true,
+    });
+    expect(
+      f.client.queries.some((q) => q._ === "setAuthenticationPhoneNumber"),
+    ).toBe(false);
+  });
+  it("keeps proxy failures blocked and redacts errors even after later native auth updates", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const f = fixture(undefined, {
+        proxy: parseTelegramProxy(
+          "socks5://user:private-secret@proxy.example:1080",
+        ),
+      });
+      f.client.proxyOperation = async () => {
+        throw { code: 400, message: "Bad proxy private-secret proxy.example" };
+      };
+      expect((await f.gateway.connect(f.ws, f.id)).state).toBe("UNAVAILABLE");
+      f.client.update({
+        _: "updateAuthorizationState",
+        authorization_state: { _: "authorizationStateWaitPhoneNumber" },
+      });
+      expect(f.gateway.status(f.ws, f.id).state).toBe("UNAVAILABLE");
+      expect(f.gateway.status(f.ws, f.id).error).toContain(
+        "TELEGRAM_PROXY_URL",
+      );
+      await expect(
+        f.gateway.auth(f.ws, f.id, "phone", "private-phone"),
+      ).rejects.toThrow("TELEGRAM_PROXY_URL");
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(
+        /private-secret|proxy\.example/,
+      );
+      expect(JSON.stringify(f.gateway.status(f.ws, f.id))).not.toMatch(
+        /private-secret|proxy\.example/,
+      );
+      expect(
+        f.client.queries.filter((q) => q._ === "disableProxy"),
+      ).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+  it("disables a saved proxy on restart when the setting is removed", async () => {
+    const f = fixture(undefined, {
+      proxy: parseTelegramProxy("socks5://proxy.example:1080"),
+    });
+    await f.gateway.connect(f.ws, f.id);
+    await f.gateway.close();
+    gateways.splice(gateways.indexOf(f.gateway), 1);
+    const restored = fixture(f.root);
+    await restored.gateway.start();
+    expect(restored.client.queries[0]).toEqual({ _: "disableProxy" });
+    expect(restored.gateway.status(f.ws, f.id).state).toBe("STARTING");
+  });
+  it("bounds proxy setup waiting and never unlocks login after a late completion", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const f = fixture();
+      let finish!: (v: unknown) => void;
+      f.client.proxyOperation = () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        });
+      const connecting = f.gateway.connect(f.ws, f.id);
+      await vi.advanceTimersByTimeAsync(10001);
+      expect((await connecting).state).toBe("UNAVAILABLE");
+      finish({});
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(f.gateway.status(f.ws, f.id).state).toBe("UNAVAILABLE");
+    } finally {
+      vi.useRealTimers();
+      warn.mockRestore();
+    }
+  });
   it("loads the installed native TDLib library", () => {
     expect(nativeInfo().version).toMatch(/^1\.8\./);
   });
