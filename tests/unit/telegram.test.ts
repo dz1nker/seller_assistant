@@ -192,6 +192,38 @@ describe("TDLib adapter and durable journal", () => {
       warn.mockRestore();
     }
   });
+  it("reports native network states using only known labels", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const f = fixture();
+      await f.gateway.connect(f.ws, f.id);
+      f.client.update({
+        _: "updateConnectionState",
+        state: { _: "connectionStateConnecting" },
+      });
+      f.client.update({
+        _: "updateConnectionState",
+        state: { _: "private-phone-or-api-hash" },
+      });
+      expect(info).toHaveBeenCalledWith(
+        JSON.stringify({
+          event: "telegram_connection_state",
+          state: "connectionStateConnecting",
+        }),
+      );
+      expect(info).toHaveBeenCalledWith(
+        JSON.stringify({
+          event: "telegram_connection_state",
+          state: "UNKNOWN",
+        }),
+      );
+      expect(JSON.stringify(info.mock.calls)).not.toContain(
+        "private-phone-or-api-hash",
+      );
+    } finally {
+      info.mockRestore();
+    }
+  });
   it("serializes duplicate commands and waits for TDLib success before SENT", async () => {
     const f = fixture();
     await ready(f);

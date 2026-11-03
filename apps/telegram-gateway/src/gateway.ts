@@ -625,7 +625,21 @@ export class TelegramGateway {
       return;
     }
     if (kind === "updateConnectionState") {
-      s.online = object(u.state)._ === "connectionStateReady";
+      const state = text(object(u.state)._);
+      s.online = state === "connectionStateReady";
+      const known = [
+        "connectionStateWaitingForNetwork",
+        "connectionStateConnectingToProxy",
+        "connectionStateConnecting",
+        "connectionStateUpdating",
+        "connectionStateReady",
+      ];
+      console.info(
+        JSON.stringify({
+          event: "telegram_connection_state",
+          state: known.includes(state) ? state : "UNKNOWN",
+        }),
+      );
       if (s.auth === "READY")
         this.emit(s, { kind: "status", state: this.status(s.ws, s.id).state });
       return;
