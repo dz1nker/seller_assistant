@@ -11,6 +11,7 @@ import { FormError } from "./editor";
 const labels: Record<string, string> = {
   STARTING: "Подготовка",
   AUTHORIZING: "Ожидаем ответ Telegram…",
+  AUTH_TIMEOUT: "Ответ Telegram не получен",
   WAIT_PHONE: "Номер телефона",
   WAIT_CODE: "Код Telegram",
   WAIT_PASSWORD: "Двухфакторный пароль",

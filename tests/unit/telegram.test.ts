@@ -17,7 +17,7 @@ class FakeNative implements NativeClient {
   sent: TdObject[] = [];
   closed = false;
   reject?: unknown;
-  authOperation?: () => Promise<unknown>;
+  authOperation?: (query: TdObject) => Promise<unknown>;
   on(event: "update" | "error", listener: (v: unknown) => void) {
     this.listeners.set(event, listener);
   }
@@ -33,8 +33,15 @@ class FakeNative implements NativeClient {
   async invoke(q: TdObject) {
     if (q._ === "getMe") return { id: 123 };
     if (q._ === "getChat") return { id: 42, type: { _: "chatTypePrivate" } };
-    if (q._ === "setAuthenticationPhoneNumber" && this.authOperation)
-      return this.authOperation();
+    if (
+      [
+        "setAuthenticationPhoneNumber",
+        "checkAuthenticationCode",
+        "checkAuthenticationPassword",
+      ].includes(String(q._)) &&
+      this.authOperation
+    )
+      return this.authOperation(q);
     if (q._ === "checkAuthenticationCode" && q.code === "wrong")
       throw { code: 400, message: "PHONE_CODE_INVALID sensitive-value" };
     if (q._ === "sendMessage") {
@@ -223,6 +230,78 @@ describe("TDLib adapter and durable journal", () => {
     } finally {
       info.mockRestore();
     }
+  });
+  it("ends the waiting display after 60 seconds without retrying an unresolved request", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const f = fixture();
+      await f.gateway.connect(f.ws, f.id);
+      f.client.update({
+        _: "updateAuthorizationState",
+        authorization_state: { _: "authorizationStateWaitPhoneNumber" },
+      });
+      f.client.update({
+        _: "updateConnectionState",
+        state: { _: "connectionStateConnecting" },
+      });
+      let count = 0;
+      let finish!: (v: unknown) => void;
+      f.client.authOperation = () => {
+        count++;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      };
+      await f.gateway.auth(f.ws, f.id, "phone", "fixture-phone");
+      vi.setSystemTime(Date.now() + 61000);
+      const status = f.gateway.status(f.ws, f.id);
+      expect(status.state).toBe("AUTH_TIMEOUT");
+      expect(status.error).toContain("не установил соединение");
+      await expect(
+        f.gateway.auth(f.ws, f.id, "phone", "fixture-phone"),
+      ).rejects.toThrow("ещё выполняется");
+      expect(count).toBe(1);
+      f.client.update({
+        _: "updateAuthorizationState",
+        authorization_state: { _: "authorizationStateWaitCode" },
+      });
+      expect(f.gateway.status(f.ws, f.id).state).toBe("WAIT_CODE");
+      finish({});
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("shows the actual next auth step even if the previous RPC is unresolved, and ignores its late completion", async () => {
+    const f = fixture();
+    await f.gateway.connect(f.ws, f.id);
+    f.client.update({
+      _: "updateAuthorizationState",
+      authorization_state: { _: "authorizationStateWaitPhoneNumber" },
+    });
+    let finishPhone!: (v: unknown) => void, finishCode!: (v: unknown) => void;
+    f.client.authOperation = (q) =>
+      new Promise((resolve) => {
+        if (q._ === "setAuthenticationPhoneNumber") finishPhone = resolve;
+        else finishCode = resolve;
+      });
+    await f.gateway.auth(f.ws, f.id, "phone", "fixture-phone");
+    f.client.update({
+      _: "updateAuthorizationState",
+      authorization_state: { _: "authorizationStateWaitCode" },
+    });
+    expect(f.gateway.status(f.ws, f.id).state).toBe("WAIT_CODE");
+    await f.gateway.auth(f.ws, f.id, "code", "fixture-code");
+    finishPhone({});
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(f.gateway.status(f.ws, f.id).state).toBe("AUTHORIZING");
+    f.client.update({
+      _: "updateAuthorizationState",
+      authorization_state: { _: "authorizationStateWaitPassword" },
+    });
+    finishCode({});
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(f.gateway.status(f.ws, f.id).state).toBe("WAIT_PASSWORD");
   });
   it("serializes duplicate commands and waits for TDLib success before SENT", async () => {
     const f = fixture();

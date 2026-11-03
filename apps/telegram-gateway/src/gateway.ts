@@ -53,6 +53,9 @@ type Session = {
   link?: string;
   error?: string;
   authPending?: Promise<void>;
+  authStartedAt?: number;
+  authFromState?: string;
+  networkState?: string;
   accountId?: string;
   allowed: Set<string>;
   early: Map<string, unknown>;
@@ -281,20 +284,35 @@ export class TelegramGateway {
   }
   status(ws: string, id: string) {
     const s = this.session(ws, id);
+    const awaiting = s.authPending !== undefined && s.auth === s.authFromState;
+    const timedOut =
+      awaiting && Date.now() - (s.authStartedAt ?? Date.now()) >= 60000;
+    const offline = [
+      "connectionStateWaitingForNetwork",
+      "connectionStateConnectingToProxy",
+      "connectionStateConnecting",
+    ].includes(s.networkState ?? "");
+    const error = timedOut
+      ? offline
+        ? "За 60 секунд TDLib не установил соединение с Telegram. Проверьте доступ контейнера к сети Telegram. Повторный запрос автоматически не отправляется."
+        : "Telegram не подтвердил шаг авторизации за 60 секунд. Результат пока неизвестен; проверьте официальный Telegram и журнал Gateway. Повторный запрос автоматически не отправляется."
+      : s.error;
     return {
-      state: s.authPending
-        ? "AUTHORIZING"
-        : s.auth === "READY" && !s.online
-          ? "RECONNECTING"
-          : s.auth,
+      state: timedOut
+        ? "AUTH_TIMEOUT"
+        : awaiting
+          ? "AUTHORIZING"
+          : s.auth === "READY" && !s.online
+            ? "RECONNECTING"
+            : s.auth,
       ...(s.link ? { link: s.link } : {}),
-      ...(s.error ? { error: s.error } : {}),
+      ...(error ? { error } : {}),
       ...(s.accountId ? { accountId: s.accountId } : {}),
     };
   }
   async auth(ws: string, id: string, kind: string, value: string) {
     const s = this.session(ws, id);
-    if (s.authPending)
+    if (s.authPending && s.auth === s.authFromState)
       throw new GatewayError(
         409,
         "Предыдущий шаг авторизации ещё выполняется. Дождитесь ответа Telegram.",
@@ -337,11 +355,20 @@ export class TelegramGateway {
     // TDLib may wait for a remote response longer than the HTTP proxy timeout.
     // Submit once and report progress through the existing status polling.
     s.error = undefined;
-    s.authPending = Promise.resolve()
+    s.authStartedAt = Date.now();
+    s.authFromState = s.auth;
+    const fromState = s.auth;
+    const operation = Promise.resolve()
       .then(() => s.client.invoke(query))
       .then(() => undefined)
       .catch((error) => {
-        if (this.closing || this.sessions.get(id) !== s) return;
+        if (
+          this.closing ||
+          this.sessions.get(id) !== s ||
+          s.authPending !== operation ||
+          s.auth !== fromState
+        )
+          return;
         const info = telegramErrorInfo(error);
         s.error = info.message;
         console.warn(
@@ -354,7 +381,10 @@ export class TelegramGateway {
         );
       })
       .finally(() => {
+        if (s.authPending !== operation) return;
         s.authPending = undefined;
+        s.authStartedAt = undefined;
+        s.authFromState = undefined;
         if (!this.closing && this.sessions.get(id) === s) {
           try {
             this.emit(s, { kind: "status", state: this.status(ws, id).state });
@@ -370,6 +400,7 @@ export class TelegramGateway {
           }
         }
       });
+    s.authPending = operation;
     return this.status(ws, id);
   }
   allow(ws: string, id: string, ids: string[]) {
@@ -615,6 +646,12 @@ export class TelegramGateway {
     if (kind === "updateAuthorizationState") {
       const a = object(u.authorization_state);
       s.auth = authState(a);
+      console.info(
+        JSON.stringify({
+          event: "telegram_authorization_state",
+          state: s.auth,
+        }),
+      );
       s.link = typeof a.link === "string" ? a.link : undefined;
       s.error = undefined;
       if (s.auth === "READY") {
@@ -634,10 +671,11 @@ export class TelegramGateway {
         "connectionStateUpdating",
         "connectionStateReady",
       ];
+      s.networkState = known.includes(state) ? state : "UNKNOWN";
       console.info(
         JSON.stringify({
           event: "telegram_connection_state",
-          state: known.includes(state) ? state : "UNKNOWN",
+          state: s.networkState,
         }),
       );
       if (s.auth === "READY")
