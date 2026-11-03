@@ -104,3 +104,11 @@ PLAYWRIGHT_NO_SANDBOX=true XDG_CONFIG_HOME=/tmp/sales-chromium-config XDG_CACHE_
 Все пять Compose-сервисов запущены с health checks. В runtime Gateway фактически загружена TDLib 1.8.69. В контейнерном Chromium проверены регистрация, запись бизнес-настроек, выполнение DEMO-команды настоящим BullMQ worker, сохранение сессии/истории после restart API/web/Gateway. Остановка Redis дала readiness 503, восстановление вернуло авторизованный доступ. Тестовый smoke-аккаунт и его данные удаляются. Живая авторизация/обмен с Telegram и внешний LLM с пользовательским ключом не выполнялись. Windows launcher требует отдельной проверки на Windows.
 
 Несжатые runtime images в текущей Linux cloud: API около 367 МБ, web около 299 МБ, Gateway около 374 МБ. Это размеры образов, не оценка времени скачивания на компьютере пользователя. После сборки очищен только созданный задачей BuildKit cache, все volumes сохранены.
+
+## Восстановление доступа к БД — 3 ноября 2026
+
+Для ошибки `28P01` добавлены `scripts/repair-db-auth.sh` и `REPAIR_DATABASE_WINDOWS.cmd`. Восстановление меняет пароль существующей роли на значение текущего POSTGRES_PASSWORD через разрешённый локальный socket и psql `\password`; SQL передаёт уже зашифрованный пароль. Таблицы, аккаунты, переписки, `.env`, volumes и checksum ledger не сбрасываются. Если локальная аутентификация запрещена, helper останавливается и не меняет pg_hba.conf.
+
+Проверены 6 unit-тестов диагностики и настоящий изолированный Docker/PostgreSQL smoke `node tests/windows/repair-db-auth-smoke.mjs`: намеренно расходящиеся пароль БД и env, отказ TCP-аутентификации до восстановления, успешный вход после, сохранение контрольной записи, повторный запуск, отсутствие паролей в выводе/журнале. Проверен также stdin с CRLF через нормализацию `tr -d '\r'`, используемую в PowerShell-инструкции. Native Windows launcher по-прежнему требует проверки на Windows. Smoke использует отдельный контейнер с tmpfs, без host ports/named volumes; рабочая БД не менялась.
+
+`scripts/migrate.mjs` сохраняет исходные checksum checks, advisory lock и транзакции; ошибки теперь содержат безопасные SQLSTATE/фазу/имя миграции и фиксированное объяснение без raw message/detail/SQL/connection URL. Клиент закрывается и при отказе соединения; CLI использует fileURLToPath для путей с пробелами/Windows.

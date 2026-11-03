@@ -47,6 +47,8 @@ jobs:
       - run: npm run db:generate && npm run build:packages && npm run db:migrate
       - run: npm run typecheck
       - run: npm test && npm run test:integration
+      - name: Verify database password recovery preserves data
+        run: node tests/windows/repair-db-auth-smoke.mjs
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
