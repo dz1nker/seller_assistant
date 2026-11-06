@@ -1,7 +1,11 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   Send,
   Search,
@@ -16,6 +20,7 @@ import {
 import { Badge, Button, Card, Field, Input, Textarea } from "@sales/ui";
 import type {
   AnalysisView,
+  AiAccessView,
   ContactView,
   ConversationView,
   MessageView,
@@ -26,6 +31,7 @@ import { useAction, useData, useDebounced, localDate } from "../lib/crm";
 import { api } from "../lib/api";
 import { Editor, FormError, selectClass } from "./editor";
 import { Loading, ErrorNotice } from "./feedback";
+import { AiAuthorizationControl } from "./ai-access";
 export function Conversations() {
   const params = useSearchParams(),
     client = useQueryClient();
@@ -265,6 +271,7 @@ function Chat({
     [showAI, setShowAI] = useState(true),
     [selectClient, setSelectClient] = useState(false),
     [createDeal, setCreateDeal] = useState(false);
+  const detachSuggestion = useCallback(() => setSuggestion(null), []);
   const [contactId, setContactId] = useState(c.contactId ?? ""),
     [contactName, setContactName] = useState(c.title),
     [error, setError] = useState<Error | null>(null);
@@ -693,7 +700,9 @@ function Chat({
       </Card>
       {showAI && (
         <AiPanel
+          key={c.id}
           conversation={c}
+          authorizationChanged={detachSuggestion}
           use={async (id, text) => {
             await api(`/ai/suggestions/${id}/feedback`, {
               method: "POST",
@@ -757,14 +766,37 @@ function Chat({
 function AiPanel({
   conversation: c,
   use,
+  authorizationChanged,
 }: {
   conversation: ConversationView;
   use: (id: string, text: string) => Promise<void>;
+  authorizationChanged: () => void;
 }) {
+  const access = useQuery({
+    queryKey: ["ai-access", c.id],
+    queryFn: () => api<AiAccessView>(`/ai/conversations/${c.id}/access`),
+    enabled: c.source === "TELEGRAM" && c.mode === "CLIENT",
+    refetchInterval: 15000,
+  });
+  const permitted =
+    c.mode === "CLIENT" &&
+    (c.source === "DEMO" || access.data?.allowed === true);
+  const previousAuthorization = useRef<string | null | undefined>(undefined);
+  const authorizationId = access.data?.authorization?.id ?? null;
+  useEffect(() => {
+    if (!access.isFetched) return;
+    if (
+      !permitted ||
+      (previousAuthorization.current !== undefined &&
+        previousAuthorization.current !== authorizationId)
+    )
+      authorizationChanged();
+    previousAuthorization.current = authorizationId;
+  }, [access.isFetched, authorizationId, permitted, authorizationChanged]);
   const rows = useData<AnalysisView[]>(
     "analysis",
     `/ai/conversations/${c.id}`,
-    c.mode === "CLIENT" && c.source === "DEMO",
+    permitted,
   );
   const action = useAction();
   const client = useQueryClient();
@@ -776,21 +808,38 @@ function AiPanel({
         <Sparkles className="size-5 text-primary" />
         <h2 className="font-semibold">AI Copilot</h2>
       </div>
-      {c.source !== "DEMO" ? (
-        <p className="text-sm leading-7 text-muted-foreground">
-          Анализ настоящих Telegram-переписок закрыт по политике источника.
-          Выбор клиента не заменяет необходимые права и согласия. Помощник
-          доступен на синтетических демо-данных.
-        </p>
-      ) : c.mode !== "CLIENT" ? (
+      {c.source === "TELEGRAM" && c.mode === "CLIENT" && (
+        <AiAuthorizationControl
+          conversationId={c.id}
+          title={c.title}
+          access={access.data}
+        />
+      )}
+      {c.mode !== "CLIENT" ? (
         <p className="text-sm text-muted-foreground">
           Сначала выберите диалог для работы.
         </p>
+      ) : !permitted ? (
+        <>
+          <FormError error={access.error} />
+          {access.isPending && c.source === "TELEGRAM" && (
+            <p className="text-sm text-muted-foreground">
+              Проверяем разрешение ИИ…
+            </p>
+          )}
+          {c.source !== "TELEGRAM" && (
+            <p className="text-sm text-muted-foreground">
+              Для этого источника анализ не поддерживается.
+            </p>
+          )}
+        </>
       ) : (
         <>
           <div className="mb-4 rounded-xl bg-muted p-3 text-xs leading-6 text-muted-foreground">
-            Данные этого диалога синтетические. ИИ предлагает текст; решение и
-            отправка остаются за вами.
+            {c.source === "DEMO"
+              ? "Данные этого диалога синтетические. "
+              : "ИИ получит сообщения этого выбранного диалога и сведения о бизнесе. "}
+            ИИ предлагает текст; решение и отправка остаются за вами.
           </div>
           <Button
             className="mb-4 w-full"

@@ -8,9 +8,14 @@ import {
 } from "@nestjs/common";
 import { Database } from "../infrastructure";
 import type { Prisma } from "@sales/database";
+import { AppConfig } from "../config";
+import { aiProviderFingerprint, aiSetup } from "../ai/provider";
 @Injectable()
 export class PrivacyEngine {
-  constructor(@Inject(Database) private db: Database) {}
+  constructor(
+    @Inject(Database) private db: Database,
+    @Inject(AppConfig) private config: AppConfig,
+  ) {}
   async conversation(
     workspaceId: string,
     id: string,
@@ -34,20 +39,78 @@ export class PrivacyEngine {
       throw new ForbiddenException("Переписка не выбрана для работы");
     return c;
   }
-  async ai(workspaceId: string, id: string) {
-    const c = await this.conversation(workspaceId, id);
-    const allowed = c.mode === "CLIENT" && c.source === "DEMO";
-    const reason =
-      c.mode !== "CLIENT"
-        ? "Диалог исключён или ещё не выбран для работы"
-        : c.source !== "DEMO"
-          ? "Реальная Telegram-переписка запрещена для внешней LLM: необходимы отдельно подтверждённые права и политика источника"
-          : "Синтетический демонстрационный источник";
-    await this.db.aiPolicyDecision.create({
+  async inspectAi(
+    workspaceId: string,
+    id: string,
+    tx: Prisma.TransactionClient = this.db,
+    lock = false,
+  ) {
+    const c = await this.conversation(workspaceId, id, tx, lock);
+    const authorization =
+      c.source === "TELEGRAM"
+        ? await tx.aiAuthorization.findFirst({
+            where: { workspaceId, conversationId: id, revokedAt: null },
+            orderBy: { createdAt: "desc" },
+          })
+        : null;
+    let allowed = false;
+    let reason = "Для этого источника ИИ-анализ не поддерживается";
+    if (c.mode !== "CLIENT")
+      reason = "Диалог исключён или ещё не выбран для работы";
+    else if (c.source === "DEMO") {
+      allowed = true;
+      reason = "Синтетический демонстрационный источник";
+    } else if (c.source === "TELEGRAM") {
+      const provider = aiSetup(this.config);
+      if (!authorization)
+        reason =
+          "Для Telegram требуется отдельная проверка политики источника и документированных прав на обработку этого диалога";
+      else if (authorization.expiresAt <= new Date())
+        reason = "Срок разрешения на ИИ-анализ истёк";
+      else if (
+        authorization.providerFingerprint !== aiProviderFingerprint(this.config)
+      )
+        reason =
+          "ИИ-провайдер или модель изменились. Проверьте и оформите разрешение заново";
+      else if (provider.provider !== "openai" || !provider.configured)
+        reason =
+          "Для анализа Telegram подключите настоящего ИИ-провайдера на сервере";
+      else if (
+        !(await tx.workspaceMember.findFirst({
+          where: {
+            workspaceId,
+            userId: authorization.approvedBy,
+            role: { in: ["OWNER", "ADMIN"] },
+          },
+        }))
+      )
+        reason =
+          "Проверивший разрешение администратор больше не имеет нужных прав";
+      else {
+        allowed = true;
+        reason =
+          "Политика источника и права на этот диалог зарегистрированы для текущего ИИ-провайдера";
+      }
+    }
+    return { conversation: c, allowed, reason, authorization };
+  }
+  async ai(
+    workspaceId: string,
+    id: string,
+    tx: Prisma.TransactionClient = this.db,
+    lock = false,
+  ) {
+    const {
+      conversation: c,
+      allowed,
+      reason,
+      authorization,
+    } = await this.inspectAi(workspaceId, id, tx, lock);
+    await tx.aiPolicyDecision.create({
       data: { workspaceId, conversationId: id, allowed, reason },
     });
     if (!allowed) throw new ForbiddenException(reason);
-    return c;
+    return { ...c, aiAuthorizationId: authorization?.id ?? null };
   }
   async purge(
     tx: Prisma.TransactionClient,
@@ -58,6 +121,9 @@ export class PrivacyEngine {
     // so a delayed retry cannot resend a previously accepted command.
     await tx.message.deleteMany({ where: { workspaceId, conversationId } });
     await tx.aiAnalysis.deleteMany({ where: { workspaceId, conversationId } });
+    await tx.aiAuthorization.deleteMany({
+      where: { workspaceId, conversationId },
+    });
     await tx.task.deleteMany({ where: { workspaceId, conversationId } });
     await tx.dealConversation.deleteMany({
       where: { workspaceId, conversationId },

@@ -17,6 +17,7 @@ export function Realtime() {
     const groups: Record<string, string[]> = {
       "conversation.updated": [
         "conversations",
+        "ai-access",
         "contacts",
         "messages",
         "analysis",
@@ -40,6 +41,7 @@ export function Realtime() {
       ],
       "task.created": ["tasks", "notifications", "analytics"],
       "ai.analysis_ready": ["analysis", "analytics"],
+      "ai.authorization_changed": ["ai-access", "analysis", "conversations"],
       "connection.status_changed": ["connections"],
       "notification.created": ["notifications"],
       "business.updated": ["business", "products", "analysis"],

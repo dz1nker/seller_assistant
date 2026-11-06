@@ -1,4 +1,43 @@
 import { z } from "zod";
+export const aiAuthorizationSchema = z
+  .object({
+    sourcePolicyReference: z.string().trim().min(10).max(1000),
+    sourcePolicyVersion: z.string().trim().min(3).max(200),
+    rightsBasis: z.enum([
+      "DOCUMENTED_CONSENT",
+      "CONTRACTUAL_RIGHTS",
+      "OTHER_DOCUMENTED_RIGHTS",
+    ]),
+    rightsReference: z.string().trim().min(10).max(1000),
+    reviewNotes: z.string().trim().min(30).max(2000),
+    expiresAt: z.iso.datetime(),
+    policyReviewed: z.literal(true),
+    rightsVerified: z.literal(true),
+    providerRevision: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+export type AiAuthorizationInput = z.infer<typeof aiAuthorizationSchema>;
+export interface AiSetupView {
+  provider: "disabled" | "demo" | "openai";
+  configured: boolean;
+  model: string;
+  endpoint: string;
+  proxyConfigured: boolean;
+  revision: string;
+}
+export interface AiAccessView {
+  allowed: boolean;
+  reason: string;
+  provider: AiSetupView;
+  authorization: {
+    id: string;
+    expiresAt: string;
+    createdAt: string;
+    revokedAt: string | null;
+    providerEndpoint: string;
+    providerModel: string;
+  } | null;
+}
 export const analysisSchema = z
   .object({
     summary: z.string().max(2000),

@@ -9,7 +9,7 @@ flowchart LR
   API -->|private Bearer API| Gateway[TDLib Gateway]
   Gateway --> Telegram[Telegram MTProto]
   Gateway -->|authenticated events| API
-  API -->|only permitted DEMO context| LLM[OpenAI-compatible API]
+  API -->|DEMO or authorized Telegram context| LLM[OpenAI-compatible API]
 ```
 
 Backend остаётся модульным монолитом. Отдельный Gateway изолирует нативную TDLib и сессии. Контракт `ChannelAdapter` и capabilities находятся в `packages/shared`; Instagram пока не реализован. Общие входные данные проверяет Zod, данные API всегда ограничиваются Workspace из живой серверной сессии.
@@ -38,7 +38,9 @@ Gateway не опубликован на хосте Compose. Все private rout
 
 ## AI
 
-`AiService` строит контекст только после `PrivacyEngine.ai`: разрешён исключительно DEMO + CLIENT. Telegram по умолчанию запрещён, bypass отсутствует. Контекст включает последние допустимые сообщения с UUID, ограниченные продукты/материалы бизнеса, сделки и стадии. Hash версии учитывает изменения сообщений, бизнеса, продуктов, знаний, сделок и стадий; во время generation и при применении версия проверяется повторно.
+`AiService` строит контекст только после `PrivacyEngine.ai`: разрешён DEMO + CLIENT, а TELEGRAM + CLIENT требует отдельного AiAuthorization. Запись включает проверенную политику источника/версию, документированные права/согласия, обоснование и expiry; создаёт её OWNER/ADMIN. Разрешение относится к одному диалогу и fingerprint провайдера/endpoint/модели, не к ключу (ротация ключа допустима). Активное разрешение одно, история сохраняется; grant/revoke берут блокировку Conversation и меняют context version. Проверяются срок, источник, CLIENT и живая роль проверившего. При отзыве результаты удаляются, при исключении чистятся также разрешения. Generation повторно проверяет политику до внешнего вызова и после него; сохранение выполняется под блокировкой с проверкой разрешения/версии. Уже отправленный провайдеру запрос отзыв не отменяет. Контекст включает последние допустимые сообщения с UUID, ограниченные продукты/материалы бизнеса, сделки и стадии; документы разрешения в prompt не попадают. Hash версии учитывает изменения сообщений, разрешения, бизнеса, продуктов, знаний, сделок и стадий.
+
+`AiProvider` изолирует OpenAI-compatible транспорт и Structured Outputs. Отдельный ProxyAgent используется только для ИИ, поддерживает HTTP(S) CONNECT и proxy authentication. Redirect запрещён; deadline 25 секунд короче 30-секундного лимита Next.js. HTTP/transport errors отображаются фиксированными сообщениями без приватного upstream body. `/ai/test` использует служебный JSON без переписки и ограничен ролями/частотой.
 
 Провайдеры: disabled, явно подписанный rule-based demo, OpenAI-compatible Structured Outputs. System prompt отделяет инструкции от недоверенного JSON-контекста; модель не получает tools или доступ к sendMessage. Zod проверяет output и provenance подтверждённых фактов. Public reasoning_summary содержит короткое обоснование, не внутреннюю цепочку рассуждений. APPLIED/REJECTED/SENT различаются; SENT ставится после подтверждения исходящего сообщения, edited сравнивает отправленный текст с вариантом. Usage сохраняется только при наличии от провайдера, цена может быть неизвестна.
 

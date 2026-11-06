@@ -47,6 +47,21 @@ export class MessagesService {
     try {
       const command = await this.db.$transaction(async (tx) => {
         const c = await this.privacy.client(ws, conversationId, tx, true);
+        if (d.suggestionId) {
+          // Recheck under the same conversation lock used by AI grant/revoke.
+          await this.privacy.ai(ws, conversationId, tx);
+          const live = await tx.aiSuggestion.findFirst({
+            where: {
+              id: d.suggestionId,
+              workspaceId: ws,
+              analysis: { conversationId },
+            },
+          });
+          if (!live)
+            throw new ConflictException(
+              "Рекомендация больше недоступна. Снимите связь с ИИ и проверьте текст сообщения.",
+            );
+        }
         if (c.source === "TELEGRAM") {
           const conn = await tx.channelConnection.findFirst({
             where: { id: c.connectionId!, workspaceId: ws, status: "READY" },

@@ -18,7 +18,8 @@
 - [x] Incoming/outgoing/edit/delete/source confirmation events, включая официальный клиент; event/source dedupe.
 - [x] Authenticated Socket.IO tenant rooms, polling/upgrade/reconnect, BullMQ worker с восстановлением из PostgreSQL outbox.
 - [x] AI_PROVIDER disabled/demo/openai, OpenAI-compatible Structured Outputs, Zod validation, promptVersion, token usage/nullable cost.
-- [x] AI policy: только DEMO + CLIENT; настоящий Telegram не передаётся LLM и не имеет универсального bypass.
+- [x] AI policy: DEMO + CLIENT; Telegram + CLIENT только после документированной проверки политики источника и прав/согласий на конкретный диалог, с привязкой к провайдеру/модели, сроком и отзывом. Универсального bypass нет.
+- [x] Настройки/проверка провайдера без переписки, отдельный HTTP(S)-прокси ИИ, понятные ошибки ключа/квоты/модели/прокси/TLS, запрет перенаправления контекста.
 - [x] Ограниченный контекст бизнеса/продуктов/знаний/сообщений/сделок, подтверждённые факты с provenance, hash stale detection.
 - [x] Резюме, потребности, возражения, неизвестные факты, следующий шаг и три тона ответа; composer edit/manual send.
 - [x] Feedback APPLIED/REJECTED и SENT после подтверждения, фиксация редактирования; AI не зависит от MessagesService.

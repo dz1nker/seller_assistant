@@ -36,6 +36,8 @@ export function useAction() {
         "notifications",
         "analytics",
         "business",
+        "analysis",
+        "ai-access",
       ])
         void client.invalidateQueries({ queryKey: [key] });
     },

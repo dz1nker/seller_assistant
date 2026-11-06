@@ -27,7 +27,40 @@ const envSchema = z.object({
   AI_API_KEY: z.string().optional(),
   AI_BASE_URL: z.preprocess(
     (v) => (v === "" ? undefined : v),
-    z.url().default("https://api.openai.com/v1"),
+    z
+      .url()
+      .refine((v) => {
+        const u = new URL(v);
+        return (
+          ["http:", "https:"].includes(u.protocol) &&
+          !u.username &&
+          !u.password &&
+          !u.search &&
+          !u.hash
+        );
+      }, "Use an HTTP(S) API base URL without credentials, query or fragment")
+      .default("https://api.openai.com/v1"),
+  ),
+  AI_PROXY_URL: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z
+      .url()
+      .refine((v) => {
+        try {
+          const u = new URL(v);
+          decodeURIComponent(u.username);
+          decodeURIComponent(u.password);
+          return (
+            ["http:", "https:"].includes(u.protocol) &&
+            !u.search &&
+            !u.hash &&
+            (!u.pathname || u.pathname === "/")
+          );
+        } catch {
+          return false;
+        }
+      }, "Use an HTTP(S) proxy URL")
+      .optional(),
   ),
   AI_MODEL: z.preprocess(
     (v) => (v === "" ? undefined : v),

@@ -49,6 +49,7 @@ model Workspace {
   tasks Task[]
   knowledge KnowledgeItem[]
   analyses AiAnalysis[]
+  aiAuthorizations AiAuthorization[]
   notifications Notification[]
   @@map("workspaces")
 }
@@ -114,6 +115,7 @@ model AuditLog {
   workspaceId String @db.Uuid
   actorId     String @db.Uuid
   action      String @db.VarChar(100)
+  metadata    Json?
   createdAt   DateTime @default(now())
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   @@index([workspaceId, createdAt])
@@ -228,6 +230,7 @@ model Conversation {
   messages Message[]
   dealLinks DealConversation[]
   analyses AiAnalysis[]
+  aiAuthorizations AiAuthorization[]
   tasks Task[]
   @@unique([id, workspaceId])
   @@unique([workspaceId, connectionId, externalChatId])
@@ -349,14 +352,39 @@ model AiAnalysis {
   provider String
   promptVersion String
   result Json
+  authorizationId String? @db.Uuid
   createdAt DateTime @default(now())
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   conversation Conversation @relation(fields: [conversationId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  authorization AiAuthorization? @relation(fields: [authorizationId, workspaceId, conversationId], references: [id, workspaceId, conversationId], onDelete: Cascade)
   suggestions AiSuggestion[]
   usage AiUsage[]
   @@unique([id, workspaceId])
   @@index([workspaceId, conversationId, createdAt])
   @@map("ai_analyses")
+}
+model AiAuthorization {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  conversationId String @db.Uuid
+  approvedBy String @db.Uuid
+  sourcePolicyReference String @db.VarChar(1000)
+  sourcePolicyVersion String @db.VarChar(200)
+  rightsBasis String @db.VarChar(40)
+  rightsReference String @db.VarChar(1000)
+  reviewNotes String @db.VarChar(2000)
+  providerFingerprint String @db.VarChar(64)
+  providerEndpoint String @db.VarChar(1000)
+  providerModel String @db.VarChar(100)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  analyses AiAnalysis[]
+  @@unique([id, workspaceId, conversationId])
+  @@index([workspaceId, conversationId, createdAt])
+  @@map("ai_authorizations")
 }
 model AiSuggestion {
   id String @id @default(uuid()) @db.Uuid

@@ -5,6 +5,7 @@ import { useUser, useWorkspace } from "../lib/queries";
 import { Loading, ErrorNotice } from "./feedback";
 import { PageHeading } from "./page-heading";
 import { TelegramConnections } from "./telegram-connections";
+import { AiSettings } from "./ai-access";
 export function Settings() {
   const workspace = useWorkspace();
   const user = useUser();
@@ -58,6 +59,7 @@ export function Settings() {
           </p>
         </Card>
         <TelegramConnections />
+        <AiSettings />
         <Card className="xl:col-span-2">
           <div className="mb-5 flex items-center gap-3">
             <LockKeyhole className="size-5 text-primary" />

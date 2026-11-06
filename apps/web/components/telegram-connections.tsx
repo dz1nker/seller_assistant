@@ -102,8 +102,9 @@ export function TelegramConnections() {
       )}
       <div className="mt-5 flex items-start gap-2 border-t border-border pt-5 text-xs leading-6 text-muted-foreground">
         <Shield className="mt-1 size-4 shrink-0 text-primary" />
-        Выбор CLIENT разрешает CRM-синхронизацию, но не AI-обработку
-        Telegram-переписки. Секретные и защищённые диалоги не импортируются.
+        Выбор CLIENT разрешает CRM-синхронизацию. Для ИИ-анализа требуется
+        отдельное разрешение в конкретном диалоге. Секретные и защищённые
+        диалоги не импортируются.
       </div>
     </Card>
   );
